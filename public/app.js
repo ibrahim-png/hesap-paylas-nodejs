@@ -1,0 +1,268 @@
+const state = {
+  draftItems: [],
+  billCode: new URLSearchParams(location.search).get("bill")?.toUpperCase() || null,
+  billData: null,
+  participantId: null,
+};
+
+const $ = (selector) => document.querySelector(selector);
+const money = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" });
+const amount = (cents) => money.format((Number(cents) || 0) / 100);
+let toastTimer;
+
+function toast(message, error = false) {
+  const element = $("#toast");
+  element.textContent = message;
+  element.className = error ? "show error" : "show";
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => { element.className = ""; }, 3000);
+}
+
+function escapeHtml(value) {
+  return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+}
+
+function parseMoney(raw) {
+  let value = String(raw).replace(/[^\d.,]/g, "");
+  const decimalIndex = Math.max(value.lastIndexOf(","), value.lastIndexOf("."));
+  if (decimalIndex >= 0 && value.length - decimalIndex - 1 === 2) {
+    value = `${value.slice(0, decimalIndex).replace(/[.,]/g, "")}.${value.slice(decimalIndex + 1)}`;
+  } else value = value.replace(/[.,]/g, "");
+  return Math.round((Number.parseFloat(value) || 0) * 100);
+}
+
+function parseReceipt(text) {
+  const ignored = /^(ara\s*)?(genel\s*)?toplam|kdv|nak[iı]t|para üstü|kredi|visa|master|ödenen|tutar\s*$/i;
+  const priceAtEnd = /^(.*?)[\s:]+(?:₺\s*)?(\d{1,6}(?:[.,]\d{3})*[.,]\d{2})\s*(?:tl|try|₺)?$/i;
+  const found = [];
+  for (const sourceLine of text.split(/\r?\n/)) {
+    const line = sourceLine.replace(/[|_]/g, " ").replace(/\s+/g, " ").trim();
+    const match = line.match(priceAtEnd);
+    if (!match) continue;
+    let name = match[1].replace(/^[^\p{L}\p{N}]+/u, "").replace(/[.:\-]+$/, "").trim();
+    if (!name || ignored.test(name)) continue;
+    const totalCents = parseMoney(match[2]);
+    if (totalCents <= 0 || totalCents > 10_000_000) continue;
+    let quantity = 1;
+    const quantityMatch = name.match(/^(\d{1,2})\s*[xX*]\s*(.+)$/);
+    if (quantityMatch) {
+      quantity = Math.max(1, Number(quantityMatch[1]));
+      name = quantityMatch[2].trim();
+    }
+    found.push({ id: crypto.randomUUID(), name, quantity, totalCents });
+  }
+  return found.slice(0, 100);
+}
+
+async function preprocessImage(file) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1800 / bitmap.width);
+  const canvas = document.createElement("canvas");
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  const context = canvas.getContext("2d", { willReadFrequently: true });
+  context.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const imageData = context.getImageData(0, 0, canvas.width, canvas.height);
+  for (let index = 0; index < imageData.data.length; index += 4) {
+    const gray = imageData.data[index] * .299 + imageData.data[index + 1] * .587 + imageData.data[index + 2] * .114;
+    const contrast = Math.max(0, Math.min(255, (gray - 128) * 1.45 + 150));
+    imageData.data[index] = contrast;
+    imageData.data[index + 1] = contrast;
+    imageData.data[index + 2] = contrast;
+  }
+  context.putImageData(imageData, 0, 0);
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", .92));
+}
+
+async function scanReceipt(file) {
+  if (!file?.type.startsWith("image/")) return toast("Lütfen bir fotoğraf seçin.", true);
+  $("#receiptPreview").src = URL.createObjectURL(file);
+  $("#receiptPreview").classList.remove("hidden");
+  $("#previewPlaceholder").classList.add("hidden");
+  $("#ocrBox").classList.remove("hidden");
+  $("#ocrProgress").value = 3;
+  $("#ocrPercent").textContent = "%3";
+  $("#ocrStatus").textContent = "Görüntü hazırlanıyor";
+  try {
+    const processed = await preprocessImage(file);
+    const worker = await Tesseract.createWorker(["tur", "eng"], 1, {
+      workerPath: "/vendor/tesseract/worker.min.js",
+      logger(event) {
+        if (event.status === "recognizing text") {
+          const progress = Math.max(8, Math.round(event.progress * 100));
+          $("#ocrProgress").value = progress;
+          $("#ocrPercent").textContent = `%${progress}`;
+          $("#ocrStatus").textContent = "Fişteki yazılar okunuyor";
+        }
+      },
+    });
+    const result = await worker.recognize(processed);
+    await worker.terminate();
+    state.draftItems = parseReceipt(result.data.text);
+    renderDraftItems();
+    toast(state.draftItems.length ? `${state.draftItems.length} kalem bulundu. Fiyatları kontrol edin.` : "Kalem bulunamadı; elle ekleyebilirsiniz.");
+  } catch (error) {
+    console.error(error);
+    toast("Fiş okunamadı. Kalemleri elle ekleyebilirsiniz.", true);
+  } finally {
+    $("#ocrBox").classList.add("hidden");
+  }
+}
+
+function renderDraftItems() {
+  const container = $("#itemsEditor");
+  if (!state.draftItems.length) {
+    container.innerHTML = '<div class="empty"><span>⌗</span><strong>Okunan kalemler burada görünecek</strong><p>OCR sonucunu paylaşmadan önce düzenleyebilirsiniz.</p></div>';
+  } else {
+    container.innerHTML = state.draftItems.map((item, index) => `
+      <div class="edit-row" data-id="${item.id}">
+        <span class="index">${index + 1}</span>
+        <input class="item-name" aria-label="${index + 1}. ürün adı" value="${escapeHtml(item.name)}" />
+        <input class="qty" aria-label="Ürün adedi" type="number" min="1" max="99" value="${item.quantity}" />
+        <input class="price" aria-label="Ürün toplam fiyatı" inputmode="decimal" value="${(item.totalCents / 100).toFixed(2).replace(".", ",")}" />
+        <button class="delete" type="button" aria-label="Kalemi sil">✕</button>
+      </div>`).join("");
+    container.querySelectorAll(".edit-row").forEach((row) => {
+      const item = state.draftItems.find((entry) => entry.id === row.dataset.id);
+      row.querySelector(".item-name").addEventListener("input", (event) => { item.name = event.target.value; });
+      row.querySelector(".qty").addEventListener("input", (event) => { item.quantity = Math.max(1, Number(event.target.value) || 1); });
+      row.querySelector(".price").addEventListener("input", (event) => { item.totalCents = parseMoney(event.target.value); updateDraftTotal(); });
+      row.querySelector(".delete").addEventListener("click", () => { state.draftItems = state.draftItems.filter((entry) => entry.id !== item.id); renderDraftItems(); });
+    });
+  }
+  updateDraftTotal();
+  $("#createBillButton").disabled = !state.draftItems.length;
+}
+
+function updateDraftTotal() {
+  $("#draftTotal").textContent = amount(state.draftItems.reduce((sum, item) => sum + item.totalCents, 0));
+}
+
+async function createBill() {
+  const validItems = state.draftItems.filter((item) => item.name.trim() && item.totalCents > 0);
+  if (!validItems.length) return toast("En az bir ürün ve fiyat ekleyin.", true);
+  const button = $("#createBillButton");
+  button.disabled = true;
+  button.textContent = "Oluşturuluyor…";
+  try {
+    const response = await fetch("/api/bills", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#billTitle").value, items: validItems }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    location.href = `/?bill=${data.id}`;
+  } catch (error) {
+    toast(error.message || "Hesap oluşturulamadı.", true);
+    button.disabled = false;
+    button.textContent = "Hesabı oluştur";
+  }
+}
+
+async function loadBill(silent = false) {
+  try {
+    const response = await fetch(`/api/bills/${state.billCode}`, { cache: "no-store" });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    state.billData = data;
+    renderSharedBill();
+  } catch (error) {
+    if (!silent) toast(error.message || "Hesap yüklenemedi.", true);
+  }
+}
+
+function renderSharedBill() {
+  const data = state.billData;
+  const total = data.items.reduce((sum, item) => sum + Number(item.totalCents), 0);
+  const selected = data.claims.reduce((sum, claim) => sum + Number(claim.amountCents), 0);
+  const remaining = Math.max(0, total - selected);
+  $("#billSummary").innerHTML = `
+    <div class="summary-main"><div><span class="code">KOD · ${escapeHtml(state.billCode)}</span><h1>${escapeHtml(data.bill.title)}</h1><p>${data.participants.length} kişi katıldı · otomatik yenilenir</p></div>
+    <div class="summary-values"><div class="metric"><small>TOPLAM</small><strong>${amount(total)}</strong></div><div class="metric"><small>SEÇİLDİ</small><strong>${amount(selected)}</strong></div><div class="metric remaining"><small>KALDI</small><strong>${amount(remaining)}</strong></div></div></div>
+    <div class="bar"><span style="width:${total ? Math.min(100, selected / total * 100) : 0}%"></span></div>`;
+
+  const currentPerson = data.participants.find((person) => person.id === state.participantId);
+  $("#joinArea").innerHTML = currentPerson
+    ? `<div class="person-box"><span class="avatar">${escapeHtml(currentPerson.name.charAt(0).toLocaleUpperCase("tr-TR"))}</span><span><strong>${escapeHtml(currentPerson.name)}</strong> olarak seçim yapıyorsun.</span></div>`
+    : `<div class="join-box"><div><h2>Ödediğin kalemleri seçmek için katıl</h2><p>Hesap açmana gerek yok; yalnızca adını yaz.</p></div><form id="joinForm" class="join-form"><input id="personName" maxlength="50" placeholder="Adın" required /><button class="button primary">Katıl</button></form></div>`;
+  $("#joinForm")?.addEventListener("submit", joinBill);
+
+  $("#sharedItems").innerHTML = data.items.map((item) => {
+    const claims = data.claims.filter((claim) => claim.itemId === item.id);
+    const used = claims.reduce((sum, claim) => sum + Number(claim.amountCents), 0);
+    const remainingAmount = Math.max(0, Number(item.totalCents) - used);
+    const mine = claims.find((claim) => claim.participantId === state.participantId);
+    const tags = claims.map((claim) => {
+      const person = data.participants.find((entry) => entry.id === claim.participantId);
+      return `<span class="claim-tag ${claim.participantId === state.participantId ? "mine" : ""}">${escapeHtml(person?.name || "Biri")} · ${amount(claim.amountCents)}</span>`;
+    }).join("");
+    const claimForm = currentPerson && (remainingAmount > 0 || mine) ? `
+      <form class="claim-form" data-item-id="${item.id}" data-price="${item.totalCents}" data-quantity="${item.quantity}">
+        <select class="claim-mode" aria-label="Paylaşım şekli">${Number(item.quantity) > 1 ? '<option value="quantity">Adet</option>' : ""}<option value="amount" ${Number(item.quantity) === 1 ? "selected" : ""}>Tutar</option></select>
+        <input class="claim-value" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(item.quantity) > 1 ? Number(mine?.quantityMilli || 0) / 1000 : Number(mine?.amountCents || 0) / 100}" aria-label="Ödediğim pay" />
+        <button class="button primary save-claim">Kaydet</button>
+      </form>` : "";
+    return `<article class="item-card"><div class="item-top"><div><h2>${escapeHtml(item.name)}</h2>${remainingAmount === 0 ? '<span class="done">✓ TAMAMLANDI</span>' : ""}<p>${item.quantity} adet · ${amount(item.totalCents)}</p></div><div class="remaining-price"><small>Kalan</small><strong>${amount(remainingAmount)}</strong></div></div>${tags ? `<div class="claim-tags">${tags}</div>` : ""}${claimForm}</article>`;
+  }).join("");
+  document.querySelectorAll(".claim-form").forEach((form) => form.addEventListener("submit", saveClaim));
+}
+
+async function joinBill(event) {
+  event.preventDefault();
+  const name = $("#personName").value.trim();
+  if (name.length < 2) return toast("Lütfen adınızı yazın.", true);
+  try {
+    const response = await fetch(`/api/bills/${state.billCode}/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    state.participantId = data.participant.id;
+    localStorage.setItem(`hesap-paylas:${state.billCode}`, state.participantId);
+    await loadBill(true);
+    toast(`Hoş geldin ${data.participant.name}`);
+  } catch (error) { toast(error.message || "Katılım tamamlanamadı.", true); }
+}
+
+async function saveClaim(event) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const mode = form.querySelector(".claim-mode").value;
+  const value = Math.max(0, Number(form.querySelector(".claim-value").value) || 0);
+  let amountCents = Math.round(value * 100);
+  let quantityMilli = 0;
+  if (mode === "quantity") {
+    quantityMilli = Math.round(value * 1000);
+    amountCents = Math.round(Number(form.dataset.price) * quantityMilli / (Number(form.dataset.quantity) * 1000));
+  }
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const response = await fetch(`/api/bills/${state.billCode}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ participantId: state.participantId, itemId: form.dataset.itemId, amountCents, quantityMilli }) });
+    const data = await response.json();
+    if (!response.ok) throw new Error(data.error);
+    await loadBill(true);
+    toast(amountCents ? "Payın kaydedildi." : "Seçimin kaldırıldı.");
+  } catch (error) { toast(error.message || "Seçim kaydedilemedi.", true); button.disabled = false; }
+}
+
+function initialize() {
+  if (state.billCode) {
+    $("#createView").classList.add("hidden");
+    $("#billView").classList.remove("hidden");
+    $("#shareButton").classList.remove("hidden");
+    state.participantId = localStorage.getItem(`hesap-paylas:${state.billCode}`);
+    loadBill();
+    setInterval(() => {
+      if (!["INPUT", "SELECT"].includes(document.activeElement?.tagName)) loadBill(true);
+    }, 4000);
+  } else {
+    $("#cameraButton").addEventListener("click", () => $("#cameraInput").click());
+    $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
+    $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
+    $("#galleryInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
+    $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, totalCents: 0 }); renderDraftItems(); });
+    $("#createBillButton").addEventListener("click", createBill);
+  }
+  $("#shareButton").addEventListener("click", async () => {
+    await navigator.clipboard.writeText(location.href);
+    toast("Bağlantı kopyalandı.");
+  });
+}
+
+initialize();

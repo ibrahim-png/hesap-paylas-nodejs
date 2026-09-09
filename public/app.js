@@ -4,6 +4,7 @@ const state = {
   billData: null,
   currentUser: null,
   selectedUsers: [],
+  googleClientId: "",
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -34,6 +35,7 @@ async function readJson(response) {
 function showAuth() {
   state.currentUser = null;
   $("#authView").classList.remove("hidden");
+  $("#profileView").classList.add("hidden");
   $("#createView").classList.add("hidden");
   $("#billView").classList.add("hidden");
   $("#shareButton").classList.add("hidden");
@@ -43,6 +45,7 @@ function showAuth() {
 
 function showApp() {
   $("#authView").classList.add("hidden");
+  $("#profileView").classList.add("hidden");
   const account = $("#accountArea");
   account.classList.remove("hidden");
   account.innerHTML = `<span class="account-name">${escapeHtml(state.currentUser.fullName)}</span><button id="logoutButton" class="button secondary" type="button">Çıkış</button>`;
@@ -61,24 +64,86 @@ function showApp() {
   }
 }
 
-async function submitAuth(event, mode) {
-  event.preventDefault();
-  const form = event.currentTarget;
-  const button = form.querySelector("button");
-  button.disabled = true;
+function showProfile() {
+  $("#authView").classList.add("hidden");
+  $("#createView").classList.add("hidden");
+  $("#billView").classList.add("hidden");
+  $("#shareButton").classList.add("hidden");
+  $("#accountArea").classList.add("hidden");
+  $("#profileView").classList.remove("hidden");
+  $("#profileEmail").textContent = state.currentUser.email;
+  $("#profileName").value = state.currentUser.fullName || "";
+  $("#profileName").focus();
+}
+
+function renderGoogleButton() {
+  if (!state.googleClientId || !window.google?.accounts?.id) return;
+  const container = $("#googleButton");
+  container.innerHTML = "";
+  google.accounts.id.initialize({
+    client_id: state.googleClientId,
+    callback: handleGoogleCredential,
+    ux_mode: "popup",
+  });
+  google.accounts.id.renderButton(container, {
+    type: "standard",
+    theme: "outline",
+    size: "large",
+    text: "continue_with",
+    shape: "rectangular",
+    logo_alignment: "left",
+    width: Math.min(340, Math.max(240, window.innerWidth - 90)),
+    locale: "tr",
+  });
+  $("#googleStatus").classList.add("hidden");
+}
+
+async function setupGoogleSignIn() {
   try {
-    const body = mode === "register"
-      ? { fullName: $("#registerName").value, email: $("#registerEmail").value, password: $("#registerPassword").value }
-      : { email: $("#loginEmail").value, password: $("#loginPassword").value };
-    const data = await readJson(await fetch(`/api/auth/${mode}`, {
+    const data = await readJson(await fetch("/api/config", { cache: "no-store" }));
+    state.googleClientId = data.googleClientId;
+    if (!state.googleClientId) throw new Error("Google girişi için GOOGLE_CLIENT_ID eklenmemiş.");
+    renderGoogleButton();
+  } catch (error) {
+    $("#googleStatus").textContent = error.message;
+    $("#googleStatus").classList.add("error-text");
+  }
+}
+
+async function handleGoogleCredential(googleResponse) {
+  $("#googleStatus").textContent = "Google hesabı doğrulanıyor…";
+  $("#googleStatus").classList.remove("hidden", "error-text");
+  try {
+    const data = await readJson(await fetch("/api/auth/google", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
+      body: JSON.stringify({ credential: googleResponse.credential }),
     }));
     state.currentUser = data.user;
-    form.reset();
+    if (data.user.profileComplete) {
+      showApp();
+      toast("Google hesabıyla giriş yapıldı.");
+    } else showProfile();
+  } catch (error) {
+    toast(error.message, true);
+    $("#googleStatus").textContent = error.message;
+    $("#googleStatus").classList.add("error-text");
+  }
+}
+
+async function saveProfile(event) {
+  event.preventDefault();
+  const button = event.currentTarget.querySelector("button[type='submit']");
+  button.disabled = true;
+  try {
+    const data = await readJson(await fetch("/api/auth/profile", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ fullName: $("#profileName").value }),
+    }));
+    state.currentUser = data.user;
     showApp();
-    toast(mode === "register" ? "Üyeliğiniz oluşturuldu." : "Giriş yapıldı.");
+    toast("Adınız ve soyadınız kaydedildi.");
   } catch (error) {
     toast(error.message, true);
   } finally {
@@ -90,9 +155,13 @@ async function logout() {
   try {
     await fetch("/api/auth/logout", { method: "POST" });
   } finally {
+    window.google?.accounts?.id?.disableAutoSelect();
     showAuth();
+    renderGoogleButton();
   }
 }
+
+window.onGoogleLibraryLoad = renderGoogleButton;
 
 function renderSelectedPeople() {
   $("#selectedPeople").innerHTML = state.selectedUsers.length
@@ -371,8 +440,8 @@ async function saveClaim(event) {
 }
 
 async function initialize() {
-  $("#loginForm").addEventListener("submit", (event) => submitAuth(event, "login"));
-  $("#registerForm").addEventListener("submit", (event) => submitAuth(event, "register"));
+  $("#profileForm").addEventListener("submit", saveProfile);
+  $("#profileLogoutButton").addEventListener("click", logout);
   $("#cameraButton").addEventListener("click", () => $("#cameraInput").click());
   $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
   $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
@@ -391,10 +460,12 @@ async function initialize() {
   try {
     const data = await readJson(await fetch("/api/auth/me", { cache: "no-store" }));
     state.currentUser = data.user;
-    showApp();
+    if (data.user.profileComplete) showApp();
+    else showProfile();
   } catch {
     showAuth();
   }
+  await setupGoogleSignIn();
 }
 
 initialize();

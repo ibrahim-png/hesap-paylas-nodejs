@@ -61,11 +61,14 @@ button { touch-action: manipulation; }
 .my-bills-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
 .my-bill-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 108px; padding: 15px; border: 1px solid var(--line); border-radius: 17px; color: var(--ink); background: #fdfcfb; text-decoration: none; transition: .18s ease; }
 .my-bill-card:hover { border-color: #ffb29f; transform: translateY(-1px); }
+.my-bill-card.needs-payment { border-color: #e34d4d; animation: payment-reminder-pulse 1.15s ease-in-out infinite; }
 .my-bill-card h3 { font-size: 16px; }
 .code.light { margin-bottom: 7px; color: #805246; background: var(--soft); }
 .payment-alert { flex: 0 0 auto; padding: 8px 10px; border-radius: 11px; color: #8b311c; background: #ffe2d9; font-size: 10px; font-weight: 900; line-height: 1.35; letter-spacing: .04em; text-align: center; }
 .payment-alert strong { display: block; margin-top: 3px; color: #bd3819; font-size: 14px; letter-spacing: normal; }
+.payment-reminder { flex: 0 0 auto; padding: 8px 10px; border-radius: 11px; color: white; background: #d93838; font-size: 10px; font-weight: 900; line-height: 1.35; letter-spacing: .04em; text-align: center; }
 .bill-open { flex: 0 0 auto; color: var(--orange-dark); font-size: 13px; font-weight: 800; }
+@keyframes payment-reminder-pulse { 50% { border-color: #ffb0b0; background: #fff2f2; box-shadow: 0 0 0 5px #e34d4d2e; } }
 .upload-column { display: grid; gap: 13px; }
 .receipt-preview { min-height: 310px; display: grid; overflow: hidden; border: 2px dashed #ffb29f; border-radius: 28px; background: var(--soft); }
 .receipt-preview img { width: 100%; height: 310px; object-fit: contain; padding: 12px; }
@@ -149,7 +152,13 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #
 .claim-tags { display: flex; flex-wrap: wrap; gap: 7px; margin-top: 12px; }
 .claim-tag { padding: 6px 10px; border-radius: 99px; background: #f1efeb; font-size: 12px; font-weight: 700; }
 .claim-tag.mine { color: white; background: var(--ink); }
-.claim-form { display: grid; grid-template-columns: 110px minmax(100px, 160px) auto; justify-content: end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.claim-form { display: grid; grid-template-columns: 110px minmax(100px, 160px); justify-content: end; gap: 8px; margin-top: 14px; padding-top: 14px; border-top: 1px solid var(--line); }
+.claim-value-container { display: contents; }
+.payment-summary { display: flex; align-items: center; justify-content: space-between; gap: 18px; margin-top: 16px; padding: 18px; border: 1px solid #ffb29f; border-radius: 22px; background: var(--soft); }
+.payment-summary small, .payment-summary strong { display: block; }
+.payment-summary small { color: #805246; font-size: 11px; font-weight: 850; letter-spacing: .07em; }
+.payment-summary strong { margin-top: 3px; color: #bd3819; font-size: 27px; }
+.payment-summary p { margin: 4px 0 0; color: #805246; font-size: 13px; }
 .legal-note { max-width: 620px; margin: 24px auto 0; text-align: center; color: var(--muted); font-size: 12px; line-height: 1.55; }
 #toast { position: fixed; z-index: 20; top: 16px; left: 50%; transform: translate(-50%, -20px); max-width: min(92vw, 480px); padding: 11px 16px; border-radius: 12px; color: white; background: var(--ink); box-shadow: 0 12px 35px #0003; opacity: 0; pointer-events: none; transition: .2s; }
 #toast.show { transform: translate(-50%, 0); opacity: 1; }
@@ -181,5 +190,5 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #
   .join-box { align-items: stretch; flex-direction: column; }
   .join-form { width: 100%; }
   .claim-form { grid-template-columns: 1fr 1fr; }
-  .claim-form .save-claim { grid-column: 1 / -1; }
+  .payment-summary { align-items: stretch; flex-direction: column; }
 }

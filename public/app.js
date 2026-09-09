@@ -388,9 +388,9 @@ function renderMyBills() {
   container.innerHTML = `
     <div class="my-bills-heading"><div><h2>Adisyonlarım</h2><p>Dahil olduğunuz adisyonlardan birini açarak paylaşımı güncelleyebilirsiniz.</p></div></div>
     <div class="my-bills-list">${state.myBills.map((bill) => `
-      <a class="my-bill-card" href="/?bill=${encodeURIComponent(bill.id)}">
+      <a class="my-bill-card ${bill.hasPayment ? "" : "needs-payment"}" href="/?bill=${encodeURIComponent(bill.id)}">
         <div><span class="code light">KOD · ${escapeHtml(bill.id)}</span><h3>${escapeHtml(bill.title)}</h3><p>${escapeHtml(formatBillDate(bill.createdAt))} · Toplam ${amount(bill.totalCents)}</p></div>
-        ${bill.hasPayment ? `<span class="payment-alert" role="status">ÖDEME PAYIN KAYITLI<br /><strong>${amount(bill.myPaidCents)}</strong></span>` : '<span class="bill-open">Adisyonu aç ›</span>'}
+        ${bill.hasPayment ? `<span class="payment-alert" role="status">ÖDEME PAYIN KAYITLI<br /><strong>${amount(bill.myPaidCents)}</strong></span>` : '<span class="payment-reminder" role="status">ÖDEME PAYINI<br />GİR</span>'}
       </a>`).join("")}</div>`;
 }
 
@@ -441,20 +441,46 @@ function renderSharedBill() {
       const person = data.participants.find((entry) => entry.id === claim.participantId);
       return `<span class="claim-tag ${claim.participantId === currentPerson.id ? "mine" : ""}">${escapeHtml(person?.name || "Biri")} · ${amount(claim.amountCents)}</span>`;
     }).join("");
+    const savedQuantity = Number(mine?.quantityMilli || 0) / 1000;
+    const mode = !mine || savedQuantity > 0 ? "quantity" : "amount";
     const claimForm = currentPerson && (remainingAmount > 0 || mine) ? `
-      <form class="claim-form" data-item-id="${item.id}" data-price="${item.totalCents}" data-quantity="${item.quantity}">
-        <select class="claim-mode" aria-label="Paylaşım şekli">${Number(item.quantity) > 1 ? '<option value="quantity">Adet</option>' : ""}<option value="amount" ${Number(item.quantity) === 1 ? "selected" : ""}>Tutar</option></select>
-        <input class="claim-value" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(item.quantity) > 1 ? Number(mine?.quantityMilli || 0) / 1000 : Number(mine?.amountCents || 0) / 100}" aria-label="Ödediğim pay" />
-        <button class="button primary save-claim">Kaydet</button>
-      </form>` : "";
+      <div class="claim-form" data-item-id="${item.id}" data-price="${item.totalCents}" data-quantity="${item.quantity}">
+        <select class="claim-mode" aria-label="Paylaşım şekli"><option value="quantity" ${mode === "quantity" ? "selected" : ""}>Adet</option><option value="amount" ${mode === "amount" ? "selected" : ""}>Tutar</option></select>
+        <span class="claim-value-container">${claimValueField(item, mode, mode === "quantity" ? savedQuantity : Number(mine?.amountCents || 0) / 100)}</span>
+      </div>` : "";
     return `<article class="item-card"><div class="item-top"><div><h2>${escapeHtml(item.name)}</h2>${remainingAmount === 0 ? '<span class="done">✓ TAMAMLANDI</span>' : ""}<p>${item.quantity} adet · ${amount(item.totalCents)}</p></div><div class="remaining-price"><small>Kalan</small><strong>${amount(remainingAmount)}</strong></div></div>${tags ? `<div class="claim-tags">${tags}</div>` : ""}${claimForm}</article>`;
   }).join("");
-  document.querySelectorAll(".claim-form").forEach((form) => form.addEventListener("submit", saveClaim));
+  document.querySelectorAll(".claim-form").forEach((form) => {
+    form.querySelector(".claim-mode").addEventListener("change", () => {
+      const mode = form.querySelector(".claim-mode").value;
+      form.querySelector(".claim-value-container").innerHTML = claimValueField({ quantity: form.dataset.quantity }, mode, 0);
+      watchClaimValue(form);
+      updatePaymentSummary();
+    });
+    watchClaimValue(form);
+  });
+  renderPaymentSummary();
 }
 
-async function saveClaim(event) {
-  event.preventDefault();
-  const form = event.currentTarget;
+function claimValueField(item, mode, value) {
+  if (mode === "quantity") {
+    const quantity = Math.max(1, Number(item.quantity) || 1);
+    const selected = Number(value) || 0;
+    const values = Array.from({ length: quantity + 1 }, (_unused, index) => index);
+    if (!values.includes(selected)) values.push(selected);
+    values.sort((first, second) => first - second);
+    return `<select class="claim-value" aria-label="Yediğim adet">${values.map((entry) => `<option value="${entry}" ${entry === selected ? "selected" : ""}>${entry === 0 ? "Adet seç" : `${entry} adet`}</option>`).join("")}</select>`;
+  }
+  return `<input class="claim-value" type="number" min="0" step="0.01" inputmode="decimal" value="${Number(value) || ""}" placeholder="Tutar" aria-label="Ödediğim pay" />`;
+}
+
+function watchClaimValue(form) {
+  const field = form.querySelector(".claim-value");
+  field.addEventListener("input", updatePaymentSummary);
+  field.addEventListener("change", updatePaymentSummary);
+}
+
+function claimPayload(form) {
   const mode = form.querySelector(".claim-mode").value;
   const value = Math.max(0, Number(form.querySelector(".claim-value").value) || 0);
   let amountCents = Math.round(value * 100);
@@ -463,15 +489,41 @@ async function saveClaim(event) {
     quantityMilli = Math.round(value * 1000);
     amountCents = Math.round(Number(form.dataset.price) * quantityMilli / (Number(form.dataset.quantity) * 1000));
   }
-  const button = form.querySelector("button");
+  return { itemId: form.dataset.itemId, amountCents, quantityMilli };
+}
+
+function renderPaymentSummary() {
+  $("#paymentSummary").innerHTML = `<section class="payment-summary"><div><small>ÖDEMEN GEREKEN TOPLAM</small><strong id="myPaymentTotal">${amount(0)}</strong><p id="paymentSummaryNote">Yediğin kalemleri seç; ardından hepsini tek seferde kaydet.</p></div><button id="saveAllClaimsButton" class="button primary" type="button">Seçimlerimi kaydet</button></section>`;
+  $("#saveAllClaimsButton").addEventListener("click", saveAllClaims);
+  updatePaymentSummary();
+}
+
+function updatePaymentSummary() {
+  const total = [...document.querySelectorAll(".claim-form")]
+    .map(claimPayload)
+    .reduce((sum, claim) => sum + claim.amountCents, 0);
+  const totalElement = $("#myPaymentTotal");
+  const note = $("#paymentSummaryNote");
+  if (!totalElement || !note) return;
+  totalElement.textContent = amount(total);
+  note.textContent = total ? "Bu tutar, mevcut seçimlerine göre hesaplanır." : "Henüz bir kalem seçmedin.";
+}
+
+async function saveAllClaims() {
+  const button = $("#saveAllClaimsButton");
+  const claims = [...document.querySelectorAll(".claim-form")].map(claimPayload);
   button.disabled = true;
+  button.textContent = "Kaydediliyor…";
   try {
-    const response = await fetch(`/api/bills/${state.billCode}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itemId: form.dataset.itemId, amountCents, quantityMilli }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
+    for (const claim of claims) {
+      await readJson(await fetch(`/api/bills/${state.billCode}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(claim) }));
+    }
     await loadBill(true);
-    toast(amountCents ? "Payın kaydedildi." : "Seçimin kaldırıldı.");
-  } catch (error) { toast(error.message || "Seçim kaydedilemedi.", true); button.disabled = false; }
+    toast("Seçimlerin kaydedildi.");
+  } catch (error) {
+    await loadBill(true);
+    toast(error.message || "Seçimlerin kaydedilemedi.", true);
+  }
 }
 
 async function initialize() {

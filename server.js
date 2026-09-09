@@ -6,6 +6,7 @@ const path = require("node:path");
 const express = require("express");
 const helmet = require("helmet");
 const { Pool } = require("pg");
+const { OAuth2Client } = require("google-auth-library");
 
 if (!process.env.DATABASE_URL) {
   console.error("DATABASE_URL ortam değişkeni zorunludur.");
@@ -16,6 +17,8 @@ const app = express();
 const port = Number(process.env.PORT) || 3000;
 const sessionCookie = "hesap_session";
 const sessionDays = 30;
+const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
+const googleClient = new OAuth2Client(googleClientId);
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -25,7 +28,11 @@ const pool = new Pool({
 });
 
 app.set("trust proxy", 1);
-app.use(helmet({ contentSecurityPolicy: false, crossOriginEmbedderPolicy: false }));
+app.use(helmet({
+  contentSecurityPolicy: false,
+  crossOriginEmbedderPolicy: false,
+  crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
+}));
 app.use(express.json({ limit: "1mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/vendor/tesseract", express.static(path.join(__dirname, "node_modules", "tesseract.js", "dist")));
@@ -50,24 +57,6 @@ function normalizeEmail(value) {
 function maskEmail(email) {
   const [local, domain] = email.split("@");
   return `${local.slice(0, 2)}${"*".repeat(Math.max(3, Math.min(8, local.length - 2)))}@${domain}`;
-}
-
-function hashPassword(password) {
-  const salt = crypto.randomBytes(16).toString("base64url");
-  const derived = crypto.scryptSync(password, salt, 64).toString("base64url");
-  return `scrypt$${salt}$${derived}`;
-}
-
-function verifyPassword(password, storedHash) {
-  try {
-    const [algorithm, salt, expected] = String(storedHash).split("$");
-    if (algorithm !== "scrypt" || !salt || !expected) return false;
-    const actualBuffer = crypto.scryptSync(password, salt, 64);
-    const expectedBuffer = Buffer.from(expected, "base64url");
-    return actualBuffer.length === expectedBuffer.length && crypto.timingSafeEqual(actualBuffer, expectedBuffer);
-  } catch {
-    return false;
-  }
 }
 
 function readCookie(request, name) {
@@ -114,7 +103,7 @@ async function authRequired(request, response, next) {
     if (!token) return response.status(401).json({ error: "Lütfen giriş yapın." });
     const hash = tokenHash(token);
     const result = await pool.query(
-      `SELECT u.id, u.email, u.full_name AS "fullName"
+      `SELECT u.id, u.email, u.full_name AS "fullName", u.profile_complete AS "profileComplete"
        FROM user_sessions s
        JOIN users u ON u.id = s.user_id
        WHERE s.token_hash = $1 AND s.expires_at > CURRENT_TIMESTAMP
@@ -133,6 +122,11 @@ async function authRequired(request, response, next) {
   }
 }
 
+function completeProfileRequired(request, response, next) {
+  if (!request.user.profileComplete) return response.status(403).json({ error: "Önce adınızı ve soyadınızı tamamlayın." });
+  next();
+}
+
 app.get("/api/health", async (_request, response) => {
   try {
     await pool.query("SELECT 1");
@@ -142,48 +136,72 @@ app.get("/api/health", async (_request, response) => {
   }
 });
 
-app.post("/api/auth/register", async (request, response) => {
-  const fullName = normalizeFullName(request.body?.fullName);
-  const email = normalizeEmail(request.body?.email);
-  const password = String(request.body?.password || "");
-  if (fullName.split(" ").filter(Boolean).length < 2) return response.status(400).json({ error: "Adınızı ve soyadınızı yazın." });
-  if (!/^[^\s@]+@gmail\.com$/i.test(email)) return response.status(400).json({ error: "Geçerli bir Gmail adresi yazın." });
-  if (password.length < 8 || password.length > 128) return response.status(400).json({ error: "Şifre en az 8 karakter olmalıdır." });
-  try {
-    const id = crypto.randomUUID();
-    const result = await pool.query(
-      `INSERT INTO users (id, email, full_name, normalized_name, password_hash)
-       VALUES ($1, $2, $3, $4, $5)
-       RETURNING id, email, full_name AS "fullName"`,
-      [id, email, fullName, normalizeName(fullName), hashPassword(password)],
-    );
-    await createSession(request, response, id);
-    response.status(201).json({ user: result.rows[0] });
-  } catch (error) {
-    if (error.code === "23505") return response.status(409).json({ error: "Bu Gmail adresiyle daha önce üye olunmuş." });
-    safeError(response, error, "Üyelik oluşturulamadı.");
-  }
-});
+app.get("/api/config", (_request, response) => response.json({ googleClientId }));
 
-app.post("/api/auth/login", async (request, response) => {
-  const email = normalizeEmail(request.body?.email);
-  const password = String(request.body?.password || "");
+app.post("/api/auth/google", async (request, response) => {
+  const credential = String(request.body?.credential || "");
+  if (!googleClientId) return response.status(503).json({ error: "Google girişi henüz yapılandırılmadı." });
+  if (!credential || credential.length > 10_000) return response.status(400).json({ error: "Google giriş bilgisi eksik." });
   try {
-    const result = await pool.query(
-      'SELECT id, email, full_name AS "fullName", password_hash AS "passwordHash" FROM users WHERE email = $1 LIMIT 1',
-      [email],
+    const ticket = await googleClient.verifyIdToken({ idToken: credential, audience: googleClientId });
+    const payload = ticket.getPayload();
+    const googleSub = String(payload?.sub || "");
+    const email = normalizeEmail(payload?.email);
+    if (!googleSub || !payload?.email_verified || !email.endsWith("@gmail.com")) {
+      return response.status(400).json({ error: "Doğrulanmış bir Gmail hesabı seçin." });
+    }
+
+    let result = await pool.query(
+      `SELECT id, email, full_name AS "fullName", profile_complete AS "profileComplete"
+       FROM users WHERE google_sub = $1 OR email = $2
+       ORDER BY CASE WHEN google_sub = $1 THEN 0 ELSE 1 END LIMIT 1`,
+      [googleSub, email],
     );
-    const user = result.rows[0];
-    if (!user || !verifyPassword(password, user.passwordHash)) return response.status(401).json({ error: "Gmail veya şifre hatalı." });
+    let user = result.rows[0];
+    if (user) {
+      result = await pool.query(
+        `UPDATE users SET google_sub = $1, email = $2
+         WHERE id = $3
+         RETURNING id, email, full_name AS "fullName", profile_complete AS "profileComplete"`,
+        [googleSub, email, user.id],
+      );
+      user = result.rows[0];
+    } else {
+      const id = crypto.randomUUID();
+      const suggestedName = normalizeFullName(payload?.name) || email.split("@")[0];
+      result = await pool.query(
+        `INSERT INTO users (id, google_sub, email, full_name, normalized_name, profile_complete)
+         VALUES ($1, $2, $3, $4, $5, FALSE)
+         RETURNING id, email, full_name AS "fullName", profile_complete AS "profileComplete"`,
+        [id, googleSub, email, suggestedName, normalizeName(suggestedName)],
+      );
+      user = result.rows[0];
+    }
     await createSession(request, response, user.id);
-    delete user.passwordHash;
     response.json({ user });
   } catch (error) {
-    safeError(response, error, "Giriş yapılamadı.");
+    console.error("Google girişi doğrulanamadı:", error.message);
+    response.status(401).json({ error: "Google girişi doğrulanamadı. Tekrar deneyin." });
   }
 });
 
 app.get("/api/auth/me", authRequired, (request, response) => response.json({ user: request.user }));
+
+app.post("/api/auth/profile", authRequired, async (request, response) => {
+  const fullName = normalizeFullName(request.body?.fullName);
+  if (fullName.split(" ").filter(Boolean).length < 2) return response.status(400).json({ error: "Adınızı ve soyadınızı yazın." });
+  try {
+    const result = await pool.query(
+      `UPDATE users SET full_name = $1, normalized_name = $2, profile_complete = TRUE
+       WHERE id = $3
+       RETURNING id, email, full_name AS "fullName", profile_complete AS "profileComplete"`,
+      [fullName, normalizeName(fullName), request.user.id],
+    );
+    response.json({ user: result.rows[0] });
+  } catch (error) {
+    safeError(response, error, "Ad-soyad kaydedilemedi.");
+  }
+});
 
 app.post("/api/auth/logout", authRequired, async (request, response) => {
   try {
@@ -195,14 +213,14 @@ app.post("/api/auth/logout", authRequired, async (request, response) => {
   }
 });
 
-app.get("/api/users/search", authRequired, async (request, response) => {
+app.get("/api/users/search", authRequired, completeProfileRequired, async (request, response) => {
   const query = normalizeName(String(request.query.q || "").slice(0, 100)).replace(/[%_]/g, "");
   if (query.length < 2) return response.json({ users: [] });
   try {
     const result = await pool.query(
       `SELECT id, full_name AS "fullName", email
        FROM users
-       WHERE normalized_name LIKE $1 AND id <> $2
+       WHERE normalized_name LIKE $1 AND id <> $2 AND profile_complete = TRUE
        ORDER BY normalized_name
        LIMIT 10`,
       [`%${query}%`, request.user.id],
@@ -213,7 +231,7 @@ app.get("/api/users/search", authRequired, async (request, response) => {
   }
 });
 
-app.post("/api/bills", authRequired, async (request, response) => {
+app.post("/api/bills", authRequired, completeProfileRequired, async (request, response) => {
   const title = String(request.body?.title || "Arkadaşlarla yemek").trim().slice(0, 80) || "Arkadaşlarla yemek";
   const selectedIds = (Array.isArray(request.body?.participantUserIds) ? request.body.participantUserIds : [])
     .map(String)

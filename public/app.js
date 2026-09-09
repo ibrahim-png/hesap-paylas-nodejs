@@ -33,23 +33,36 @@ function parseMoney(raw) {
 
 function parseReceipt(text) {
   const ignored = /^(ara\s*)?(genel\s*)?toplam|kdv|nak[iı]t|para üstü|kredi|visa|master|ödenen|tutar\s*$/i;
-  const priceAtEnd = /^(.*?)[\s:]+(?:₺\s*)?(\d{1,6}(?:[.,]\d{3})*[.,]\d{2})\s*(?:tl|try|₺)?$/i;
+  const priceToken = /^\d{1,6}(?:[.,]\d{3})*[.,]\d{2}$/;
   const found = [];
   for (const sourceLine of text.split(/\r?\n/)) {
     const line = sourceLine.replace(/[|_]/g, " ").replace(/\s+/g, " ").trim();
-    const match = line.match(priceAtEnd);
-    if (!match) continue;
-    let name = match[1].replace(/^[^\p{L}\p{N}]+/u, "").replace(/[.:\-]+$/, "").trim();
-    if (!name || ignored.test(name)) continue;
-    const totalCents = parseMoney(match[2]);
-    if (totalCents <= 0 || totalCents > 10_000_000) continue;
-    let quantity = 1;
-    const quantityMatch = name.match(/^(\d{1,2})\s*[xX*]\s*(.+)$/);
-    if (quantityMatch) {
-      quantity = Math.max(1, Number(quantityMatch[1]));
-      name = quantityMatch[2].trim();
+    const tokens = line.split(" ").map((token) => token.replace(/^(?:₺|TL)+|(?:₺|TL)+$/gi, "")).filter(Boolean);
+    const priceIndexes = tokens.map((token, index) => priceToken.test(token) ? index : -1).filter((index) => index >= 0);
+    if (!priceIndexes.length) continue;
+
+    const totalIndex = priceIndexes.at(-1);
+    const unitIndex = priceIndexes.length >= 2 ? priceIndexes.at(-2) : -1;
+    const searchBefore = unitIndex >= 0 ? unitIndex : totalIndex;
+    let quantityIndex = -1;
+    for (let index = searchBefore - 1; index >= 0; index -= 1) {
+      if (/^\d{1,2}$/.test(tokens[index]) && Number(tokens[index]) > 0) {
+        quantityIndex = index;
+        break;
+      }
     }
-    found.push({ id: crypto.randomUUID(), name, quantity, totalCents });
+
+    const quantity = quantityIndex >= 0 ? Number(tokens[quantityIndex]) : 1;
+    const nameEnd = quantityIndex >= 0 ? quantityIndex : searchBefore;
+    let nameTokens = tokens.slice(0, nameEnd);
+    while (nameTokens.length && (/^\d+$/.test(nameTokens.at(-1)) || !/[\p{L}\p{N}]/u.test(nameTokens.at(-1)))) nameTokens.pop();
+    const name = nameTokens.join(" ").replace(/^[^\p{L}\p{N}]+|[^\p{L}\p{N}]+$/gu, "").trim();
+    if (!name || ignored.test(name)) continue;
+
+    const totalCents = parseMoney(tokens[totalIndex]);
+    const unitPriceCents = unitIndex >= 0 ? parseMoney(tokens[unitIndex]) : Math.round(totalCents / quantity);
+    if (totalCents <= 0 || totalCents > 10_000_000) continue;
+    found.push({ id: crypto.randomUUID(), name, quantity, unitPriceCents, totalCents });
   }
   return found.slice(0, 100);
 }
@@ -96,6 +109,7 @@ async function scanReceipt(file) {
         }
       },
     });
+    await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
     const result = await worker.recognize(processed);
     await worker.terminate();
     state.draftItems = parseReceipt(result.data.text);
@@ -114,19 +128,36 @@ function renderDraftItems() {
   if (!state.draftItems.length) {
     container.innerHTML = '<div class="empty"><span>⌗</span><strong>Okunan kalemler burada görünecek</strong><p>OCR sonucunu paylaşmadan önce düzenleyebilirsiniz.</p></div>';
   } else {
-    container.innerHTML = state.draftItems.map((item, index) => `
+    container.innerHTML = `<div class="items-head"><span>#</span><span>Ürün</span><span>Adet</span><span>Birim fiyat</span><span>Toplam</span><span></span></div>` + state.draftItems.map((item, index) => `
       <div class="edit-row" data-id="${item.id}">
         <span class="index">${index + 1}</span>
-        <input class="item-name" aria-label="${index + 1}. ürün adı" value="${escapeHtml(item.name)}" />
-        <input class="qty" aria-label="Ürün adedi" type="number" min="1" max="99" value="${item.quantity}" />
-        <input class="price" aria-label="Ürün toplam fiyatı" inputmode="decimal" value="${(item.totalCents / 100).toFixed(2).replace(".", ",")}" />
+        <label class="field name-field"><span>Ürün</span><input class="item-name" aria-label="${index + 1}. ürün adı" value="${escapeHtml(item.name)}" /></label>
+        <label class="field qty-field"><span>Adet</span><input class="qty" aria-label="Ürün adedi" type="number" min="1" max="99" value="${item.quantity}" /></label>
+        <label class="field unit-field"><span>Birim fiyat</span><input class="unit-price" aria-label="Ürün birim fiyatı" inputmode="decimal" value="${((item.unitPriceCents ?? Math.round(item.totalCents / item.quantity)) / 100).toFixed(2).replace(".", ",")}" /></label>
+        <label class="field total-field"><span>Toplam</span><input class="price" aria-label="Ürün toplam fiyatı" inputmode="decimal" value="${(item.totalCents / 100).toFixed(2).replace(".", ",")}" /></label>
         <button class="delete" type="button" aria-label="Kalemi sil">✕</button>
       </div>`).join("");
     container.querySelectorAll(".edit-row").forEach((row) => {
       const item = state.draftItems.find((entry) => entry.id === row.dataset.id);
       row.querySelector(".item-name").addEventListener("input", (event) => { item.name = event.target.value; });
-      row.querySelector(".qty").addEventListener("input", (event) => { item.quantity = Math.max(1, Number(event.target.value) || 1); });
-      row.querySelector(".price").addEventListener("input", (event) => { item.totalCents = parseMoney(event.target.value); updateDraftTotal(); });
+      row.querySelector(".qty").addEventListener("input", (event) => {
+        item.quantity = Math.max(1, Number(event.target.value) || 1);
+        item.totalCents = item.quantity * item.unitPriceCents;
+        row.querySelector(".price").value = (item.totalCents / 100).toFixed(2).replace(".", ",");
+        updateDraftTotal();
+      });
+      row.querySelector(".unit-price").addEventListener("input", (event) => {
+        item.unitPriceCents = parseMoney(event.target.value);
+        item.totalCents = item.quantity * item.unitPriceCents;
+        row.querySelector(".price").value = (item.totalCents / 100).toFixed(2).replace(".", ",");
+        updateDraftTotal();
+      });
+      row.querySelector(".price").addEventListener("input", (event) => {
+        item.totalCents = parseMoney(event.target.value);
+        item.unitPriceCents = Math.round(item.totalCents / item.quantity);
+        row.querySelector(".unit-price").value = (item.unitPriceCents / 100).toFixed(2).replace(".", ",");
+        updateDraftTotal();
+      });
       row.querySelector(".delete").addEventListener("click", () => { state.draftItems = state.draftItems.filter((entry) => entry.id !== item.id); renderDraftItems(); });
     });
   }
@@ -256,7 +287,7 @@ function initialize() {
     $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
     $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
     $("#galleryInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
-    $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, totalCents: 0 }); renderDraftItems(); });
+    $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, unitPriceCents: 0, totalCents: 0 }); renderDraftItems(); });
     $("#createBillButton").addEventListener("click", createBill);
   }
   $("#shareButton").addEventListener("click", async () => {

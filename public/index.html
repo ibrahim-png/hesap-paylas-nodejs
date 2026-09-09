@@ -6,6 +6,7 @@
     <meta name="description" content="Restoran fişini okut, kalemleri arkadaşlarınla paylaş." />
     <title>Hesap Paylaş</title>
     <link rel="stylesheet" href="/styles.css" />
+    <script async defer src="https://accounts.google.com/gsi/client"></script>
     <script defer src="/vendor/tesseract/tesseract.min.js"></script>
     <script defer src="/app.js"></script>
   </head>
@@ -29,23 +30,25 @@
           <h1>Hesabı birlikte paylaşın</h1>
           <p>Fişi okutun, masadaki kişileri seçin ve herkes ödediği kalemleri işaretlesin.</p>
         </div>
-        <div class="auth-grid">
-          <form id="loginForm" class="auth-card">
-            <h2>Giriş yap</h2>
-            <p>Daha önce oluşturduğunuz hesapla devam edin.</p>
-            <label><span>Gmail adresi</span><input id="loginEmail" type="email" autocomplete="email" placeholder="ornek@gmail.com" required /></label>
-            <label><span>Şifre</span><input id="loginPassword" type="password" autocomplete="current-password" minlength="8" required /></label>
-            <button class="button primary" type="submit">Giriş yap</button>
-          </form>
-          <form id="registerForm" class="auth-card">
-            <h2>Üye ol</h2>
-            <p>Bilgilerinizi bir kez girin; sonraki adisyonlarda tekrar yazmayın.</p>
-            <label><span>Ad ve soyad</span><input id="registerName" maxlength="100" autocomplete="name" placeholder="Ad Soyad" required /></label>
-            <label><span>Gmail adresi</span><input id="registerEmail" type="email" autocomplete="email" placeholder="ornek@gmail.com" required /></label>
-            <label><span>Şifre</span><input id="registerPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="En az 8 karakter" required /></label>
-            <button class="button primary" type="submit">Üye ol</button>
-          </form>
+        <div class="auth-grid single">
+          <div class="auth-card google-auth-card">
+            <h2>Giriş yap veya üye ol</h2>
+            <p>Telefonunuzdaki Google hesabını seçin. Şifre oluşturmanız gerekmez.</p>
+            <div id="googleButton" class="google-button"></div>
+            <small id="googleStatus">Google giriş düğmesi hazırlanıyor…</small>
+          </div>
         </div>
+      </section>
+
+      <section id="profileView" class="profile-view hidden">
+        <form id="profileForm" class="auth-card profile-card">
+          <span class="receipt-glyph">✓</span>
+          <h1>Son bir adım</h1>
+          <p><strong id="profileEmail"></strong> hesabınız doğrulandı. Adisyonda görünecek adınızı ve soyadınızı yazın.</p>
+          <label><span>Ad ve soyad</span><input id="profileName" maxlength="100" autocomplete="name" placeholder="Ad Soyad" required /></label>
+          <button class="button primary" type="submit">Kaydet ve devam et</button>
+          <button id="profileLogoutButton" class="button secondary" type="button">Farklı Google hesabı kullan</button>
+        </form>
       </section>
 
       <section id="createView" class="create-grid hidden">

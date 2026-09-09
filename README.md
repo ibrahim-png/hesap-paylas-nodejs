@@ -6,6 +6,7 @@ Restoran fişini Tesseract.js ile okuyup ürünleri arkadaşlar arasında adet v
 
 - Telefondan yeni fotoğraf çekme veya galeriden mevcut fiş fotoğrafı yükleme
 - Ücretsiz Tesseract.js OCR (`tur` + `eng`)
+- İsteğe bağlı OpenAI Vision ile yapılandırılmış ürün/adet/fiyat okuma
 - OCR öncesi kontrast ve gri tonlama iyileştirmesi
 - Bulunan ürünleri, adetleri ve fiyatları düzeltme
 - Paylaşılabilir bağlantı ve 7 karakterli hesap kodu
@@ -18,7 +19,7 @@ Restoran fişini Tesseract.js ile okuyup ürünleri arkadaşlar arasında adet v
 - Neon PostgreSQL üzerinde kalıcı veri
 - Aynı kalemin eşzamanlı olarak fazla seçilmesini engelleyen veritabanı kilidi
 
-Fiş fotoğrafı sunucuya gönderilmez. OCR kullanıcının tarayıcısında çalışır; Neon'a yalnızca kullanıcının kontrol ettiği ürün, fiyat ve paylaşım bilgileri kaydedilir.
+Fiş fotoğrafı Tesseract seçeneğinde sunucuya gönderilmez; OCR kullanıcının tarayıcısında çalışır. Kullanıcı **Yapay zekâyla oku** seçeneğini seçerse, küçültülmüş fiş görseli yalnızca o istek için sunucu üzerinden OpenAI API'ye gönderilir; uygulama görseli veya OpenAI yanıtını veritabanına kaydetmez.
 
 ## Teknolojiler
 
@@ -38,6 +39,8 @@ npm install
 ```env
 DATABASE_URL=postgresql://USER:PASSWORD@HOST/DATABASE?sslmode=require
 GOOGLE_CLIENT_ID=1234567890-example.apps.googleusercontent.com
+OPENAI_API_KEY=sk-proj-...
+OPENAI_RECEIPT_MODEL=gpt-5-mini
 PORT=3000
 ```
 
@@ -57,8 +60,9 @@ Uygulama açılırken `db/schema.sql` dosyasını otomatik çalıştırır ve ek
 4. `DATABASE_URL` ortam değişkenine Neon bağlantı adresinizi ekleyin.
 5. Google Cloud'da **Web application** türünde OAuth istemcisi oluşturun; Render adresinizi **Authorized JavaScript origins** listesine ekleyin.
 6. Oluşan istemci kimliğini Render'da `GOOGLE_CLIENT_ID` olarak ekleyin.
-7. Build komutu: `npm ci`
-8. Start komutu: `npm start`
+7. OpenAI API anahtarını Render'da `OPENAI_API_KEY` olarak ekleyin. Anahtarı tarayıcıya, Git'e veya kaynak koda yazmayın.
+8. Build komutu: `npm ci`
+9. Start komutu: `npm start`
 
 Deploy sonrasında `/api/health` adresinin `{ "ok": true }` döndürmesi gerekir.
 

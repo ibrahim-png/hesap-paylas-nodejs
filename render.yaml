@@ -13,3 +13,7 @@ services:
         sync: false
       - key: GOOGLE_CLIENT_ID
         sync: false
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: OPENAI_RECEIPT_MODEL
+        value: gpt-5-mini

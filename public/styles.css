@@ -77,6 +77,8 @@ button { touch-action: manipulation; }
 .placeholder p { max-width: 270px; margin: 10px auto 0; color: #805246; line-height: 1.55; }
 .receipt-glyph { display: grid; place-items: center; width: 64px; height: 64px; margin: 0 auto 16px; border-radius: 50%; background: white; color: var(--orange); font-size: 30px; }
 .upload-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+.upload-actions .ai-scan { grid-column: 1 / -1; color: #6d2b88; border-color: #d8b8e8; background: #fbf4ff; }
+.upload-actions .ai-scan:hover:not(:disabled) { border-color: #b06acb; background: #f6e8ff; }
 .progress-box, .editor-card, .join-box, .person-box, .item-card { border: 1px solid var(--line); background: white; box-shadow: 0 12px 35px #2f291f0d; }
 .progress-box { padding: 15px; border-radius: 18px; }
 .progress-box > div { display: flex; justify-content: space-between; margin-bottom: 9px; font-size: 14px; }

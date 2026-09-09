@@ -6,6 +6,8 @@ const state = {
   myBills: [],
   selectedUsers: [],
   googleClientId: "",
+  receiptFile: null,
+  receiptScanId: null,
 };
 
 const $ = (selector) => document.querySelector(selector);
@@ -246,9 +248,9 @@ function parseReceipt(text) {
   return found.slice(0, 100);
 }
 
-async function preprocessImage(file) {
+async function preprocessImage(file, maxWidth = 1800, quality = .92) {
   const bitmap = await createImageBitmap(file);
-  const scale = Math.min(1, 1800 / bitmap.width);
+  const scale = Math.min(1, maxWidth / bitmap.width);
   const canvas = document.createElement("canvas");
   canvas.width = Math.round(bitmap.width * scale);
   canvas.height = Math.round(bitmap.height * scale);
@@ -263,18 +265,40 @@ async function preprocessImage(file) {
     imageData.data[index + 2] = contrast;
   }
   context.putImageData(imageData, 0, 0);
-  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", .92));
+  return new Promise((resolve) => canvas.toBlob((blob) => resolve(blob || file), "image/jpeg", quality));
+}
+
+function beginReceiptScan(file, status) {
+  const scanId = crypto.randomUUID();
+  state.receiptFile = file;
+  state.receiptScanId = scanId;
+  $("#receiptPreview").src = URL.createObjectURL(file);
+  $("#receiptPreview").classList.remove("hidden");
+  $("#previewPlaceholder").classList.add("hidden");
+  $("#aiScanButton").disabled = false;
+  $("#ocrBox").classList.remove("hidden");
+  $("#ocrProgress").value = 8;
+  $("#ocrPercent").textContent = "%8";
+  $("#ocrStatus").textContent = status;
+  return scanId;
+}
+
+function finishReceiptScan(scanId) {
+  if (state.receiptScanId === scanId) $("#ocrBox").classList.add("hidden");
+}
+
+function blobToDataUrl(blob) {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error("Fiş görseli hazırlanamadı."));
+    reader.readAsDataURL(blob);
+  });
 }
 
 async function scanReceipt(file) {
   if (!file?.type.startsWith("image/")) return toast("Lütfen bir fotoğraf seçin.", true);
-  $("#receiptPreview").src = URL.createObjectURL(file);
-  $("#receiptPreview").classList.remove("hidden");
-  $("#previewPlaceholder").classList.add("hidden");
-  $("#ocrBox").classList.remove("hidden");
-  $("#ocrProgress").value = 3;
-  $("#ocrPercent").textContent = "%3";
-  $("#ocrStatus").textContent = "Görüntü hazırlanıyor";
+  const scanId = beginReceiptScan(file, "Görüntü hazırlanıyor");
   try {
     const processed = await preprocessImage(file);
     const worker = await Tesseract.createWorker(["tur", "eng"], 1, {
@@ -291,14 +315,44 @@ async function scanReceipt(file) {
     await worker.setParameters({ tessedit_pageseg_mode: "6", preserve_interword_spaces: "1" });
     const result = await worker.recognize(processed);
     await worker.terminate();
+    if (state.receiptScanId !== scanId) return;
     state.draftItems = parseReceipt(result.data.text);
     renderDraftItems();
     toast(state.draftItems.length ? `${state.draftItems.length} kalem bulundu. Fiyatları kontrol edin.` : "Kalem bulunamadı; elle ekleyebilirsiniz.");
   } catch (error) {
     console.error(error);
-    toast("Fiş okunamadı. Kalemleri elle ekleyebilirsiniz.", true);
+    if (state.receiptScanId === scanId) toast("Fiş okunamadı. Kalemleri elle ekleyebilirsiniz.", true);
   } finally {
-    $("#ocrBox").classList.add("hidden");
+    finishReceiptScan(scanId);
+  }
+}
+
+async function scanReceiptWithAi(selectedFile = state.receiptFile) {
+  const file = selectedFile;
+  if (!file) return toast("Önce bir fiş fotoğrafı seçin.", true);
+  const scanId = beginReceiptScan(file, "Fiş yapay zekâ ile inceleniyor");
+  const button = $("#aiScanButton");
+  button.disabled = true;
+  try {
+    const processed = await preprocessImage(file, 1200, .78);
+    const imageData = await blobToDataUrl(processed);
+    $("#ocrProgress").value = 35;
+    $("#ocrPercent").textContent = "%35";
+    const data = await readJson(await fetch("/api/receipts/ai", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ imageData }),
+    }));
+    if (state.receiptScanId !== scanId) return;
+    state.draftItems = data.items;
+    renderDraftItems();
+    const warning = data.warnings?.[0] ? ` ${data.warnings[0]}` : "";
+    toast(state.draftItems.length ? `${state.draftItems.length} kalem yapay zekâ ile bulundu.${warning}` : "Yapay zekâ kalem bulamadı; elle ekleyebilirsiniz.", !state.draftItems.length);
+  } catch (error) {
+    if (state.receiptScanId === scanId) toast(error.message || "Fiş yapay zekâ ile okunamadı.", true);
+  } finally {
+    button.disabled = !state.receiptFile;
+    finishReceiptScan(scanId);
   }
 }
 
@@ -531,8 +585,9 @@ async function initialize() {
   $("#profileLogoutButton").addEventListener("click", logout);
   $("#cameraButton").addEventListener("click", () => $("#cameraInput").click());
   $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
-  $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
-  $("#galleryInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
+  $("#cameraInput").addEventListener("change", (event) => scanReceiptWithAi(event.target.files[0]));
+  $("#galleryInput").addEventListener("change", (event) => scanReceiptWithAi(event.target.files[0]));
+  $("#aiScanButton").addEventListener("click", scanReceiptWithAi);
   $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, unitPriceCents: 0, totalCents: 0 }); renderDraftItems(); });
   $("#createBillButton").addEventListener("click", createBill);
   $("#personSearch").addEventListener("input", () => {

@@ -19,6 +19,9 @@ const sessionCookie = "hesap_session";
 const sessionDays = 30;
 const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const googleClient = new OAuth2Client(googleClientId);
+const openaiApiKey = process.env.OPENAI_API_KEY || "";
+const openaiReceiptModel = process.env.OPENAI_RECEIPT_MODEL || "gpt-5-mini";
+const aiReceiptRequests = new Map();
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -33,7 +36,7 @@ app.use(helmet({
   crossOriginEmbedderPolicy: false,
   crossOriginOpenerPolicy: { policy: "same-origin-allow-popups" },
 }));
-app.use(express.json({ limit: "1mb" }));
+app.use(express.json({ limit: "3mb" }));
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/vendor/tesseract", express.static(path.join(__dirname, "node_modules", "tesseract.js", "dist")));
 
@@ -127,6 +130,25 @@ function completeProfileRequired(request, response, next) {
   next();
 }
 
+function aiReceiptAllowed(userId) {
+  const now = Date.now();
+  const windowStart = now - 60 * 60 * 1000;
+  const recent = (aiReceiptRequests.get(userId) || []).filter((time) => time >= windowStart);
+  if (recent.length >= 12) return false;
+  recent.push(now);
+  aiReceiptRequests.set(userId, recent);
+  return true;
+}
+
+function responseOutputText(openaiResponse) {
+  if (typeof openaiResponse.output_text === "string") return openaiResponse.output_text;
+  return (openaiResponse.output || [])
+    .flatMap((item) => item.content || [])
+    .filter((content) => content.type === "output_text")
+    .map((content) => content.text)
+    .join("");
+}
+
 app.get("/api/health", async (_request, response) => {
   try {
     await pool.query("SELECT 1");
@@ -137,6 +159,87 @@ app.get("/api/health", async (_request, response) => {
 });
 
 app.get("/api/config", (_request, response) => response.json({ googleClientId }));
+
+app.post("/api/receipts/ai", authRequired, completeProfileRequired, async (request, response) => {
+  if (!openaiApiKey) return response.status(503).json({ error: "Yapay zekâ ile fiş okuma henüz yapılandırılmadı." });
+  if (!aiReceiptAllowed(request.user.id)) return response.status(429).json({ error: "Yapay zekâ ile fiş okuma için saatlik sınıra ulaştınız. Lütfen sonra tekrar deneyin." });
+
+  const imageData = String(request.body?.imageData || "");
+  const imageMatch = imageData.match(/^data:image\/(jpeg|png|webp);base64,([a-z0-9+/=\s]+)$/i);
+  if (!imageMatch) return response.status(400).json({ error: "Geçerli bir fiş görseli gönderin." });
+  const imageBytes = Buffer.from(imageMatch[2], "base64");
+  if (!imageBytes.length || imageBytes.length > 2_000_000) return response.status(413).json({ error: "Fiş görseli en fazla 2 MB olmalıdır." });
+
+  try {
+    const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
+      method: "POST",
+      signal: AbortSignal.timeout(60_000),
+      headers: { Authorization: `Bearer ${openaiApiKey}`, "Content-Type": "application/json" },
+      body: JSON.stringify({
+        model: openaiReceiptModel,
+        store: false,
+        max_output_tokens: 1_800,
+        input: [{
+          role: "user",
+          content: [
+            { type: "input_text", text: "Bu bir Türkiye restoran fişi. Sadece satılabilir yiyecek/içecek kalemlerini çıkar. Ara toplam, genel toplam, KDV, indirim, ödeme yöntemi, para üstü ve servis bilgilerini kalem olarak ekleme. Fiyatları Türk lirası kuruşu olarak döndür. Adet net değilse 1 kullan. Okunamayan veya şüpheli satırları warnings alanına yaz." },
+            { type: "input_image", image_url: imageData, detail: "high" },
+          ],
+        }],
+        text: {
+          format: {
+            type: "json_schema",
+            name: "restaurant_receipt",
+            strict: true,
+            schema: {
+              type: "object",
+              additionalProperties: false,
+              required: ["items", "warnings"],
+              properties: {
+                items: {
+                  type: "array",
+                  maxItems: 100,
+                  items: {
+                    type: "object",
+                    additionalProperties: false,
+                    required: ["name", "quantity", "totalCents"],
+                    properties: {
+                      name: { type: "string" },
+                      quantity: { type: "integer" },
+                      totalCents: { type: "integer" },
+                    },
+                  },
+                },
+                warnings: { type: "array", items: { type: "string" }, maxItems: 20 },
+              },
+            },
+          },
+        },
+      }),
+    });
+    const result = await openaiResponse.json().catch(() => ({}));
+    if (!openaiResponse.ok) {
+      console.error("OpenAI fiş okuma hatası:", result?.error?.message || openaiResponse.status);
+      return response.status(openaiResponse.status === 429 ? 429 : 502).json({ error: openaiResponse.status === 429 ? "Yapay zekâ servisi şu an yoğun. Lütfen tekrar deneyin." : "Fiş yapay zekâ ile okunamadı." });
+    }
+    const parsed = JSON.parse(responseOutputText(result));
+    const items = (Array.isArray(parsed.items) ? parsed.items : []).map((item) => {
+      const quantity = Math.max(1, Math.min(99, Math.round(Number(item.quantity) || 1)));
+      const totalCents = Math.round(Number(item.totalCents) || 0);
+      return {
+        id: crypto.randomUUID(),
+        name: String(item.name || "").trim().slice(0, 120),
+        quantity,
+        totalCents,
+        unitPriceCents: Math.round(totalCents / quantity),
+      };
+    }).filter((item) => item.name && item.totalCents > 0 && item.totalCents <= 10_000_000).slice(0, 100);
+    response.set("Cache-Control", "no-store").json({ items, warnings: (Array.isArray(parsed.warnings) ? parsed.warnings : []).map((warning) => String(warning).slice(0, 200)) });
+  } catch (error) {
+    console.error("Yapay zekâ ile fiş okuma başarısız:", error);
+    response.status(502).json({ error: "Fiş yapay zekâ ile okunamadı. Lütfen tekrar deneyin." });
+  }
+});
 
 app.post("/api/auth/google", async (request, response) => {
   const credential = String(request.body?.credential || "");

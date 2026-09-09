@@ -2,13 +2,16 @@ const state = {
   draftItems: [],
   billCode: new URLSearchParams(location.search).get("bill")?.toUpperCase() || null,
   billData: null,
-  participantId: null,
+  currentUser: null,
+  selectedUsers: [],
 };
 
 const $ = (selector) => document.querySelector(selector);
 const money = new Intl.NumberFormat("tr-TR", { style: "currency", currency: "TRY" });
 const amount = (cents) => money.format((Number(cents) || 0) / 100);
 let toastTimer;
+let searchTimer;
+let refreshTimer;
 
 function toast(message, error = false) {
   const element = $("#toast");
@@ -20,6 +23,111 @@ function toast(message, error = false) {
 
 function escapeHtml(value) {
   return String(value).replace(/[&<>'"]/g, (character) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "'": "&#39;", '"': "&quot;" })[character]);
+}
+
+async function readJson(response) {
+  const data = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(data.error || "İşlem tamamlanamadı.");
+  return data;
+}
+
+function showAuth() {
+  state.currentUser = null;
+  $("#authView").classList.remove("hidden");
+  $("#createView").classList.add("hidden");
+  $("#billView").classList.add("hidden");
+  $("#shareButton").classList.add("hidden");
+  $("#accountArea").classList.add("hidden");
+  if (refreshTimer) clearInterval(refreshTimer);
+}
+
+function showApp() {
+  $("#authView").classList.add("hidden");
+  const account = $("#accountArea");
+  account.classList.remove("hidden");
+  account.innerHTML = `<span class="account-name">${escapeHtml(state.currentUser.fullName)}</span><button id="logoutButton" class="button secondary" type="button">Çıkış</button>`;
+  $("#logoutButton").addEventListener("click", logout);
+  if (state.billCode) {
+    $("#createView").classList.add("hidden");
+    $("#billView").classList.remove("hidden");
+    $("#shareButton").classList.remove("hidden");
+    loadBill();
+    refreshTimer = setInterval(() => {
+      if (!["INPUT", "SELECT"].includes(document.activeElement?.tagName)) loadBill(true);
+    }, 4000);
+  } else {
+    $("#billView").classList.add("hidden");
+    $("#createView").classList.remove("hidden");
+  }
+}
+
+async function submitAuth(event, mode) {
+  event.preventDefault();
+  const form = event.currentTarget;
+  const button = form.querySelector("button");
+  button.disabled = true;
+  try {
+    const body = mode === "register"
+      ? { fullName: $("#registerName").value, email: $("#registerEmail").value, password: $("#registerPassword").value }
+      : { email: $("#loginEmail").value, password: $("#loginPassword").value };
+    const data = await readJson(await fetch(`/api/auth/${mode}`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    }));
+    state.currentUser = data.user;
+    form.reset();
+    showApp();
+    toast(mode === "register" ? "Üyeliğiniz oluşturuldu." : "Giriş yapıldı.");
+  } catch (error) {
+    toast(error.message, true);
+  } finally {
+    button.disabled = false;
+  }
+}
+
+async function logout() {
+  try {
+    await fetch("/api/auth/logout", { method: "POST" });
+  } finally {
+    showAuth();
+  }
+}
+
+function renderSelectedPeople() {
+  $("#selectedPeople").innerHTML = state.selectedUsers.length
+    ? state.selectedUsers.map((user) => `<span class="selected-person">${escapeHtml(user.fullName)}<button type="button" data-remove-user="${user.id}" aria-label="${escapeHtml(user.fullName)} kişisini kaldır">×</button></span>`).join("")
+    : '<small>Henüz başka bir kişi seçilmedi.</small>';
+  document.querySelectorAll("[data-remove-user]").forEach((button) => button.addEventListener("click", () => {
+    state.selectedUsers = state.selectedUsers.filter((user) => user.id !== button.dataset.removeUser);
+    renderSelectedPeople();
+  }));
+}
+
+async function searchUsers() {
+  const query = $("#personSearch").value.trim();
+  const container = $("#personSearchResults");
+  if (query.length < 2) {
+    container.innerHTML = "";
+    return;
+  }
+  try {
+    const data = await readJson(await fetch(`/api/users/search?q=${encodeURIComponent(query)}`, { cache: "no-store" }));
+    const users = data.users.filter((user) => !state.selectedUsers.some((selected) => selected.id === user.id));
+    container.innerHTML = users.length ? users.map((user) => `
+      <button class="person-result" type="button" data-user-id="${user.id}">
+        <span><strong>${escapeHtml(user.fullName)}</strong><small>${escapeHtml(user.emailHint)}</small></span><b>＋ Ekle</b>
+      </button>`).join("") : '<p class="search-empty">Eşleşen üye bulunamadı.</p>';
+    container.querySelectorAll("[data-user-id]").forEach((button) => button.addEventListener("click", () => {
+      const user = users.find((entry) => entry.id === button.dataset.userId);
+      if (user) state.selectedUsers.push(user);
+      $("#personSearch").value = "";
+      container.innerHTML = "";
+      renderSelectedPeople();
+    }));
+  } catch (error) {
+    toast(error.message, true);
+  }
 }
 
 function parseMoney(raw) {
@@ -176,7 +284,15 @@ async function createBill() {
   button.disabled = true;
   button.textContent = "Oluşturuluyor…";
   try {
-    const response = await fetch("/api/bills", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ title: $("#billTitle").value, items: validItems }) });
+    const response = await fetch("/api/bills", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        title: $("#billTitle").value,
+        items: validItems,
+        participantUserIds: state.selectedUsers.map((user) => user.id),
+      }),
+    });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     location.href = `/?bill=${data.id}`;
@@ -209,20 +325,17 @@ function renderSharedBill() {
     <div class="summary-values"><div class="metric"><small>TOPLAM</small><strong>${amount(total)}</strong></div><div class="metric"><small>SEÇİLDİ</small><strong>${amount(selected)}</strong></div><div class="metric remaining"><small>KALDI</small><strong>${amount(remaining)}</strong></div></div></div>
     <div class="bar"><span style="width:${total ? Math.min(100, selected / total * 100) : 0}%"></span></div>`;
 
-  const currentPerson = data.participants.find((person) => person.id === state.participantId);
-  $("#joinArea").innerHTML = currentPerson
-    ? `<div class="person-box"><span class="avatar">${escapeHtml(currentPerson.name.charAt(0).toLocaleUpperCase("tr-TR"))}</span><span><strong>${escapeHtml(currentPerson.name)}</strong> olarak seçim yapıyorsun.</span></div>`
-    : `<div class="join-box"><div><h2>Ödediğin kalemleri seçmek için katıl</h2><p>Hesap açmana gerek yok; yalnızca adını yaz.</p></div><form id="joinForm" class="join-form"><input id="personName" maxlength="50" placeholder="Adın" required /><button class="button primary">Katıl</button></form></div>`;
-  $("#joinForm")?.addEventListener("submit", joinBill);
+  const currentPerson = data.participants.find((person) => person.userId === state.currentUser.id);
+  $("#joinArea").innerHTML = `<div class="person-box"><span class="avatar">${escapeHtml(currentPerson.name.charAt(0).toLocaleUpperCase("tr-TR"))}</span><span><strong>${escapeHtml(currentPerson.name)}</strong> olarak seçim yapıyorsun.</span></div>`;
 
   $("#sharedItems").innerHTML = data.items.map((item) => {
     const claims = data.claims.filter((claim) => claim.itemId === item.id);
     const used = claims.reduce((sum, claim) => sum + Number(claim.amountCents), 0);
     const remainingAmount = Math.max(0, Number(item.totalCents) - used);
-    const mine = claims.find((claim) => claim.participantId === state.participantId);
+    const mine = claims.find((claim) => claim.participantId === currentPerson.id);
     const tags = claims.map((claim) => {
       const person = data.participants.find((entry) => entry.id === claim.participantId);
-      return `<span class="claim-tag ${claim.participantId === state.participantId ? "mine" : ""}">${escapeHtml(person?.name || "Biri")} · ${amount(claim.amountCents)}</span>`;
+      return `<span class="claim-tag ${claim.participantId === currentPerson.id ? "mine" : ""}">${escapeHtml(person?.name || "Biri")} · ${amount(claim.amountCents)}</span>`;
     }).join("");
     const claimForm = currentPerson && (remainingAmount > 0 || mine) ? `
       <form class="claim-form" data-item-id="${item.id}" data-price="${item.totalCents}" data-quantity="${item.quantity}">
@@ -233,21 +346,6 @@ function renderSharedBill() {
     return `<article class="item-card"><div class="item-top"><div><h2>${escapeHtml(item.name)}</h2>${remainingAmount === 0 ? '<span class="done">✓ TAMAMLANDI</span>' : ""}<p>${item.quantity} adet · ${amount(item.totalCents)}</p></div><div class="remaining-price"><small>Kalan</small><strong>${amount(remainingAmount)}</strong></div></div>${tags ? `<div class="claim-tags">${tags}</div>` : ""}${claimForm}</article>`;
   }).join("");
   document.querySelectorAll(".claim-form").forEach((form) => form.addEventListener("submit", saveClaim));
-}
-
-async function joinBill(event) {
-  event.preventDefault();
-  const name = $("#personName").value.trim();
-  if (name.length < 2) return toast("Lütfen adınızı yazın.", true);
-  try {
-    const response = await fetch(`/api/bills/${state.billCode}/join`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name }) });
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error);
-    state.participantId = data.participant.id;
-    localStorage.setItem(`hesap-paylas:${state.billCode}`, state.participantId);
-    await loadBill(true);
-    toast(`Hoş geldin ${data.participant.name}`);
-  } catch (error) { toast(error.message || "Katılım tamamlanamadı.", true); }
 }
 
 async function saveClaim(event) {
@@ -264,7 +362,7 @@ async function saveClaim(event) {
   const button = form.querySelector("button");
   button.disabled = true;
   try {
-    const response = await fetch(`/api/bills/${state.billCode}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ participantId: state.participantId, itemId: form.dataset.itemId, amountCents, quantityMilli }) });
+    const response = await fetch(`/api/bills/${state.billCode}/claims`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ itemId: form.dataset.itemId, amountCents, quantityMilli }) });
     const data = await response.json();
     if (!response.ok) throw new Error(data.error);
     await loadBill(true);
@@ -272,28 +370,31 @@ async function saveClaim(event) {
   } catch (error) { toast(error.message || "Seçim kaydedilemedi.", true); button.disabled = false; }
 }
 
-function initialize() {
-  if (state.billCode) {
-    $("#createView").classList.add("hidden");
-    $("#billView").classList.remove("hidden");
-    $("#shareButton").classList.remove("hidden");
-    state.participantId = localStorage.getItem(`hesap-paylas:${state.billCode}`);
-    loadBill();
-    setInterval(() => {
-      if (!["INPUT", "SELECT"].includes(document.activeElement?.tagName)) loadBill(true);
-    }, 4000);
-  } else {
-    $("#cameraButton").addEventListener("click", () => $("#cameraInput").click());
-    $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
-    $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
-    $("#galleryInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
-    $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, unitPriceCents: 0, totalCents: 0 }); renderDraftItems(); });
-    $("#createBillButton").addEventListener("click", createBill);
-  }
+async function initialize() {
+  $("#loginForm").addEventListener("submit", (event) => submitAuth(event, "login"));
+  $("#registerForm").addEventListener("submit", (event) => submitAuth(event, "register"));
+  $("#cameraButton").addEventListener("click", () => $("#cameraInput").click());
+  $("#galleryButton").addEventListener("click", () => $("#galleryInput").click());
+  $("#cameraInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
+  $("#galleryInput").addEventListener("change", (event) => scanReceipt(event.target.files[0]));
+  $("#addItemButton").addEventListener("click", () => { state.draftItems.push({ id: crypto.randomUUID(), name: "", quantity: 1, unitPriceCents: 0, totalCents: 0 }); renderDraftItems(); });
+  $("#createBillButton").addEventListener("click", createBill);
+  $("#personSearch").addEventListener("input", () => {
+    clearTimeout(searchTimer);
+    searchTimer = setTimeout(searchUsers, 300);
+  });
+  renderSelectedPeople();
   $("#shareButton").addEventListener("click", async () => {
     await navigator.clipboard.writeText(location.href);
     toast("Bağlantı kopyalandı.");
   });
+  try {
+    const data = await readJson(await fetch("/api/auth/me", { cache: "no-store" }));
+    state.currentUser = data.user;
+    showApp();
+  } catch {
+    showAuth();
+  }
 }
 
 initialize();

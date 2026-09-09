@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="tr">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="description" content="Restoran fişini okut, kalemleri arkadaşlarınla paylaş." />
+    <title>Hesap Paylaş</title>
+    <link rel="stylesheet" href="/styles.css" />
+    <script defer src="/vendor/tesseract/tesseract.min.js"></script>
+    <script defer src="/app.js"></script>
+  </head>
+  <body>
+    <div id="toast" role="status" aria-live="polite"></div>
+    <main class="shell">
+      <header class="brand-bar">
+        <a href="/" class="brand" aria-label="Yeni fiş okut">
+          <span class="brand-icon">▤</span>
+          <span><strong>Hesap Paylaş</strong><small>Fişi okut, hesabı bölüş</small></span>
+        </a>
+        <button id="shareButton" class="button secondary hidden" type="button">Bağlantıyı paylaş</button>
+      </header>
+
+      <section id="createView" class="create-grid">
+        <div class="upload-column">
+          <div class="receipt-preview" id="previewArea">
+            <img id="receiptPreview" class="hidden" alt="Seçilen restoran fişi" />
+            <div id="previewPlaceholder" class="placeholder">
+              <span class="receipt-glyph">▤</span>
+              <strong>Fiş fotoğrafını ekle</strong>
+              <p>Düz, aydınlık ve yazıların net göründüğü bir görüntü en iyi sonucu verir.</p>
+            </div>
+          </div>
+          <div class="upload-actions">
+            <button class="button primary" id="cameraButton" type="button">📷 Fotoğraf çek</button>
+            <button class="button secondary" id="galleryButton" type="button">🖼 Galeriden yükle</button>
+          </div>
+          <input id="cameraInput" type="file" accept="image/*" capture="environment" hidden />
+          <input id="galleryInput" type="file" accept="image/*" hidden />
+          <div id="ocrBox" class="progress-box hidden">
+            <div><span id="ocrStatus">Fiş okunuyor</span><strong id="ocrPercent">%0</strong></div>
+            <progress id="ocrProgress" max="100" value="0"></progress>
+            <small>İlk taramada OCR dil dosyaları indirileceği için biraz bekleyebilirsiniz.</small>
+          </div>
+        </div>
+
+        <div class="editor-card">
+          <div class="editor-header">
+            <label><span>Hesap adı</span><input id="billTitle" maxlength="80" value="Arkadaşlarla yemek" /></label>
+            <div class="total"><small>TOPLAM</small><strong id="draftTotal">₺0,00</strong></div>
+          </div>
+          <div id="itemsEditor" class="items-editor">
+            <div class="empty"><span>⌗</span><strong>Okunan kalemler burada görünecek</strong><p>OCR sonucunu paylaşmadan önce düzenleyebilirsiniz.</p></div>
+          </div>
+          <div class="editor-actions">
+            <button id="addItemButton" class="button secondary" type="button">＋ Elle kalem ekle</button>
+            <button id="createBillButton" class="button primary" type="button" disabled>Hesabı oluştur</button>
+          </div>
+        </div>
+      </section>
+
+      <section id="billView" class="hidden">
+        <div id="billSummary" class="bill-summary"></div>
+        <div id="joinArea"></div>
+        <div id="sharedItems" class="shared-items"></div>
+        <p class="legal-note">Bu uygulama ödeme almaz; yalnızca fiş kalemlerinin kim tarafından karşılandığını takip eder. OCR sonucunu paylaşmadan önce kontrol edin.</p>
+      </section>
+    </main>
+  </body>
+</html>

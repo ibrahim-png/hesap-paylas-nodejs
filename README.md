@@ -9,7 +9,9 @@ Restoran fişini Tesseract.js ile okuyup ürünleri arkadaşlar arasında adet v
 - OCR öncesi kontrast ve gri tonlama iyileştirmesi
 - Bulunan ürünleri, adetleri ve fiyatları düzeltme
 - Paylaşılabilir bağlantı ve 7 karakterli hesap kodu
-- Üyelik oluşturmadan yalnızca isimle katılma
+- Ad-soyad, Gmail ve şifreyle üyelik/giriş
+- Ad-soyad aramasıyla adisyona kişi ekleme
+- Güvenli, 30 günlük oturum; şifreleri `scrypt` ile tuzlanmış hash olarak saklama
 - Ürünü adet veya TL tutarı üzerinden bölüştürme
 - Kimin hangi kalemi üstlendiğini ve kalan toplamı gösterme
 - Neon PostgreSQL üzerinde kalıcı veri
@@ -58,9 +60,11 @@ Deploy sonrasında `/api/health` adresinin `{ "ok": true }` döndürmesi gerekir
 
 ## Veritabanı tabloları
 
-- `bills`: Paylaşılan hesaplar
+- `users`: Üyeler ve güvenli şifre hash'leri
+- `user_sessions`: Oturumlar
+- `bills`: Paylaşılan hesaplar ve oluşturan üye
 - `items`: Fişteki ürünler
-- `participants`: Hesaba isimle katılan kişiler
+- `participants`: Adisyona seçilen üyeler
 - `claims`: Kişilerin üstlendiği adet ve tutarlar
 
 Para değerleri küsurat hatalarını önlemek için kuruş cinsinden tam sayı olarak saklanır.

@@ -17,10 +17,38 @@
           <span class="brand-icon">▤</span>
           <span><strong>Hesap Paylaş</strong><small>Fişi okut, hesabı bölüş</small></span>
         </a>
-        <button id="shareButton" class="button secondary hidden" type="button">Bağlantıyı paylaş</button>
+        <div class="header-actions">
+          <button id="shareButton" class="button secondary hidden" type="button">Bağlantıyı paylaş</button>
+          <div id="accountArea" class="hidden"></div>
+        </div>
       </header>
 
-      <section id="createView" class="create-grid">
+      <section id="authView" class="auth-view">
+        <div class="auth-intro">
+          <span class="receipt-glyph">▤</span>
+          <h1>Hesabı birlikte paylaşın</h1>
+          <p>Fişi okutun, masadaki kişileri seçin ve herkes ödediği kalemleri işaretlesin.</p>
+        </div>
+        <div class="auth-grid">
+          <form id="loginForm" class="auth-card">
+            <h2>Giriş yap</h2>
+            <p>Daha önce oluşturduğunuz hesapla devam edin.</p>
+            <label><span>Gmail adresi</span><input id="loginEmail" type="email" autocomplete="email" placeholder="ornek@gmail.com" required /></label>
+            <label><span>Şifre</span><input id="loginPassword" type="password" autocomplete="current-password" minlength="8" required /></label>
+            <button class="button primary" type="submit">Giriş yap</button>
+          </form>
+          <form id="registerForm" class="auth-card">
+            <h2>Üye ol</h2>
+            <p>Bilgilerinizi bir kez girin; sonraki adisyonlarda tekrar yazmayın.</p>
+            <label><span>Ad ve soyad</span><input id="registerName" maxlength="100" autocomplete="name" placeholder="Ad Soyad" required /></label>
+            <label><span>Gmail adresi</span><input id="registerEmail" type="email" autocomplete="email" placeholder="ornek@gmail.com" required /></label>
+            <label><span>Şifre</span><input id="registerPassword" type="password" autocomplete="new-password" minlength="8" maxlength="128" placeholder="En az 8 karakter" required /></label>
+            <button class="button primary" type="submit">Üye ol</button>
+          </form>
+        </div>
+      </section>
+
+      <section id="createView" class="create-grid hidden">
         <div class="upload-column">
           <div class="receipt-preview" id="previewArea">
             <img id="receiptPreview" class="hidden" alt="Seçilen restoran fişi" />
@@ -47,6 +75,12 @@
           <div class="editor-header">
             <label><span>Hesap adı</span><input id="billTitle" maxlength="80" value="Arkadaşlarla yemek" /></label>
             <div class="total"><small>TOPLAM</small><strong id="draftTotal">₺0,00</strong></div>
+          </div>
+          <div class="people-picker">
+            <div class="section-title"><div><h2>Adisyondaki kişiler</h2><p>Siz otomatik eklenirsiniz. Diğer kişileri ad-soyad ile arayın.</p></div></div>
+            <input id="personSearch" maxlength="100" autocomplete="off" placeholder="Ad veya soyad ara" />
+            <div id="personSearchResults" class="person-search-results"></div>
+            <div id="selectedPeople" class="selected-people"></div>
           </div>
           <div id="itemsEditor" class="items-editor">
             <div class="empty"><span>⌗</span><strong>Okunan kalemler burada görünecek</strong><p>OCR sonucunu paylaşmadan önce düzenleyebilirsiniz.</p></div>

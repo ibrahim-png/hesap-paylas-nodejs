@@ -56,8 +56,12 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #
 .empty { min-height: 220px; display: grid; place-items: center; align-content: center; text-align: center; border: 1px dashed #d9d2c8; border-radius: 18px; background: #faf9f7; padding: 30px; }
 .empty span { margin-bottom: 8px; color: var(--orange); font-size: 30px; }
 .empty p { margin: 7px 0 0; color: var(--muted); font-size: 14px; }
-.edit-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 70px 112px 38px; gap: 7px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: #fdfcfb; }
+.items-head { display: grid; grid-template-columns: 28px minmax(0, 1fr) 70px 112px 112px 38px; gap: 7px; padding: 0 8px 5px; color: var(--muted); font-size: 12px; font-weight: 800; }
+.items-head span:not(:first-child) { padding-left: 3px; }
+.edit-row { display: grid; grid-template-columns: 28px minmax(0, 1fr) 70px 112px 112px 38px; gap: 7px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 16px; background: #fdfcfb; }
 .edit-row .index { text-align: center; color: var(--muted); font-weight: 750; }
+.edit-row .field { min-width: 0; }
+.edit-row .field > span { display: none; }
 .delete { border: 0; background: transparent; font-size: 18px; cursor: pointer; color: #99928a; }
 .delete:hover { color: #c52828; }
 .editor-actions { display: flex; justify-content: space-between; gap: 10px; margin-top: 18px; }
@@ -105,10 +109,12 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #
   .create-grid { grid-template-columns: 1fr; }
   .receipt-preview, .receipt-preview img { min-height: 265px; height: 265px; }
   .editor-card { padding: 15px; }
-  .edit-row { grid-template-columns: 25px minmax(0, 1fr) 38px; }
-  .edit-row .qty { grid-column: 2; width: 80px; }
-  .edit-row .price { grid-column: 2; }
-  .edit-row .delete { grid-column: 3; grid-row: 3; }
+  .items-head { display: none; }
+  .edit-row { grid-template-columns: 25px minmax(0, 1fr) 38px; align-items: start; padding: 12px 9px; }
+  .edit-row .field { grid-column: 2; }
+  .edit-row .field > span { display: block; margin: 8px 0 5px 2px; color: var(--muted); font-size: 12px; font-weight: 800; }
+  .edit-row .name-field > span { margin-top: 0; }
+  .edit-row .delete { grid-column: 3; grid-row: 1; margin-top: 2px; }
   .editor-actions { flex-direction: column; }
   .summary-main { align-items: start; flex-direction: column; }
   .summary-values { width: 100%; justify-content: space-between; gap: 10px; }

@@ -1,11 +1,18 @@
 CREATE TABLE IF NOT EXISTS users (
   id UUID PRIMARY KEY,
+  google_sub VARCHAR(255) UNIQUE,
   email VARCHAR(254) NOT NULL UNIQUE,
   full_name VARCHAR(100) NOT NULL,
   normalized_name VARCHAR(100) NOT NULL,
-  password_hash TEXT NOT NULL,
+  password_hash TEXT,
+  profile_complete BOOLEAN NOT NULL DEFAULT FALSE,
   created_at TIMESTAMPTZ NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
+
+ALTER TABLE users ADD COLUMN IF NOT EXISTS google_sub VARCHAR(255);
+ALTER TABLE users ADD COLUMN IF NOT EXISTS profile_complete BOOLEAN NOT NULL DEFAULT FALSE;
+ALTER TABLE users ALTER COLUMN password_hash DROP NOT NULL;
+CREATE UNIQUE INDEX IF NOT EXISTS idx_users_google_sub_unique ON users(google_sub) WHERE google_sub IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS user_sessions (
   token_hash VARCHAR(64) PRIMARY KEY,

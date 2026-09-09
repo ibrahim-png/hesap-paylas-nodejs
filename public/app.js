@@ -3,6 +3,7 @@ const state = {
   billCode: new URLSearchParams(location.search).get("bill")?.toUpperCase() || null,
   billData: null,
   currentUser: null,
+  myBills: [],
   selectedUsers: [],
   googleClientId: "",
 };
@@ -61,6 +62,7 @@ function showApp() {
   } else {
     $("#billView").classList.add("hidden");
     $("#createView").classList.remove("hidden");
+    loadMyBills();
   }
 }
 
@@ -369,6 +371,39 @@ async function createBill() {
     toast(error.message || "Hesap oluşturulamadı.", true);
     button.disabled = false;
     button.textContent = "Hesabı oluştur";
+  }
+}
+
+function formatBillDate(value) {
+  return new Intl.DateTimeFormat("tr-TR", { dateStyle: "medium" }).format(new Date(value));
+}
+
+function renderMyBills() {
+  const container = $("#myBills");
+  if (!state.myBills.length) {
+    container.innerHTML = `<div class="my-bills-heading"><div><h2>Adisyonlarım</h2><p>Henüz eklendiğiniz bir adisyon yok.</p></div></div>`;
+    return;
+  }
+
+  container.innerHTML = `
+    <div class="my-bills-heading"><div><h2>Adisyonlarım</h2><p>Dahil olduğunuz adisyonlardan birini açarak paylaşımı güncelleyebilirsiniz.</p></div></div>
+    <div class="my-bills-list">${state.myBills.map((bill) => `
+      <a class="my-bill-card" href="/?bill=${encodeURIComponent(bill.id)}">
+        <div><span class="code light">KOD · ${escapeHtml(bill.id)}</span><h3>${escapeHtml(bill.title)}</h3><p>${escapeHtml(formatBillDate(bill.createdAt))} · Toplam ${amount(bill.totalCents)}</p></div>
+        ${bill.hasPayment ? `<span class="payment-alert" role="status">ÖDEME PAYIN KAYITLI<br /><strong>${amount(bill.myPaidCents)}</strong></span>` : '<span class="bill-open">Adisyonu aç ›</span>'}
+      </a>`).join("")}</div>`;
+}
+
+async function loadMyBills() {
+  const container = $("#myBills");
+  container.innerHTML = `<div class="my-bills-heading"><div><h2>Adisyonlarım</h2><p>Adisyonlarınız yükleniyor…</p></div></div>`;
+  try {
+    const data = await readJson(await fetch("/api/bills/mine", { cache: "no-store" }));
+    state.myBills = data.bills;
+    renderMyBills();
+  } catch (error) {
+    container.innerHTML = `<div class="my-bills-heading"><div><h2>Adisyonlarım</h2><p>Adisyonlarınız şu an yüklenemedi.</p></div></div>`;
+    toast(error.message || "Adisyonlarınız yüklenemedi.", true);
   }
 }
 

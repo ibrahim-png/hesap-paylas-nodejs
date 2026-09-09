@@ -278,6 +278,29 @@ app.post("/api/bills", authRequired, completeProfileRequired, async (request, re
   }
 });
 
+app.get("/api/bills/mine", authRequired, completeProfileRequired, async (request, response) => {
+  try {
+    const result = await pool.query(
+      `SELECT b.id, b.title, b.created_at AS "createdAt",
+              COALESCE((SELECT SUM(i.total_cents) FROM items i WHERE i.bill_id = b.id), 0) AS "totalCents",
+              COALESCE((SELECT SUM(c.amount_cents) FROM claims c WHERE c.participant_id = p.id), 0) AS "myPaidCents",
+              EXISTS(
+                SELECT 1 FROM claims c
+                WHERE c.participant_id = p.id AND (c.amount_cents > 0 OR c.quantity_milli > 0)
+              ) AS "hasPayment"
+       FROM participants p
+       JOIN bills b ON b.id = p.bill_id
+       WHERE p.user_id = $1
+       ORDER BY b.created_at DESC
+       LIMIT 100`,
+      [request.user.id],
+    );
+    response.set("Cache-Control", "no-store").json({ bills: result.rows });
+  } catch (error) {
+    safeError(response, error, "Adisyonlarınız yüklenemedi.");
+  }
+});
+
 app.get("/api/bills/:id", authRequired, async (request, response) => {
   try {
     const billId = request.params.id.toUpperCase();

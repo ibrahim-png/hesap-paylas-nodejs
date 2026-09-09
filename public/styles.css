@@ -53,6 +53,19 @@ button { touch-action: manipulation; }
 .profile-card label { text-align: left; }
 .profile-card .receipt-glyph { color: #176d42; background: #e6f6ec; }
 .create-grid { display: grid; grid-template-columns: minmax(280px, .82fr) minmax(0, 1.35fr); gap: 24px; align-items: start; }
+.my-bills { grid-column: 1 / -1; padding: 20px; border: 1px solid var(--line); border-radius: 24px; background: white; box-shadow: 0 12px 35px #2f291f0d; }
+.my-bills-heading { display: flex; align-items: end; justify-content: space-between; gap: 16px; margin-bottom: 14px; }
+.my-bills-heading h2, .my-bills-heading p, .my-bill-card h3, .my-bill-card p { margin: 0; }
+.my-bills-heading h2 { font-size: 20px; }
+.my-bills-heading p, .my-bill-card p { margin-top: 4px; color: var(--muted); font-size: 13px; line-height: 1.45; }
+.my-bills-list { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 10px; }
+.my-bill-card { display: flex; align-items: center; justify-content: space-between; gap: 12px; min-height: 108px; padding: 15px; border: 1px solid var(--line); border-radius: 17px; color: var(--ink); background: #fdfcfb; text-decoration: none; transition: .18s ease; }
+.my-bill-card:hover { border-color: #ffb29f; transform: translateY(-1px); }
+.my-bill-card h3 { font-size: 16px; }
+.code.light { margin-bottom: 7px; color: #805246; background: var(--soft); }
+.payment-alert { flex: 0 0 auto; padding: 8px 10px; border-radius: 11px; color: #8b311c; background: #ffe2d9; font-size: 10px; font-weight: 900; line-height: 1.35; letter-spacing: .04em; text-align: center; }
+.payment-alert strong { display: block; margin-top: 3px; color: #bd3819; font-size: 14px; letter-spacing: normal; }
+.bill-open { flex: 0 0 auto; color: var(--orange-dark); font-size: 13px; font-weight: 800; }
 .upload-column { display: grid; gap: 13px; }
 .receipt-preview { min-height: 310px; display: grid; overflow: hidden; border: 2px dashed #ffb29f; border-radius: 28px; background: var(--soft); }
 .receipt-preview img { width: 100%; height: 310px; object-fit: contain; padding: 12px; }
@@ -151,6 +164,8 @@ input:focus, select:focus { border-color: var(--orange); box-shadow: 0 0 0 3px #
   .auth-grid { grid-template-columns: 1fr; }
   .auth-card { padding: 20px; }
   .create-grid { grid-template-columns: 1fr; }
+  .my-bills { padding: 16px; }
+  .my-bill-card { min-height: 96px; }
   .receipt-preview, .receipt-preview img { min-height: 265px; height: 265px; }
   .editor-card { padding: 15px; }
   .items-head { display: none; }

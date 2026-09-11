@@ -347,7 +347,8 @@ async function scanReceiptWithAi(selectedFile = state.receiptFile) {
     state.draftItems = data.items;
     renderDraftItems();
     const warning = data.warnings?.[0] ? ` ${data.warnings[0]}` : "";
-    toast(state.draftItems.length ? `${state.draftItems.length} kalem yapay zekâ ile bulundu.${warning}` : "Yapay zekâ kalem bulamadı; elle ekleyebilirsiniz.", !state.draftItems.length);
+    const retryNote = Number(data.attempts) > 1 ? ` ${data.attempts}. denemede okundu.` : "";
+    toast(state.draftItems.length ? `${state.draftItems.length} kalem yapay zekâ ile bulundu.${retryNote}${warning}` : "Yapay zekâ kalem bulamadı; elle ekleyebilirsiniz.", !state.draftItems.length);
   } catch (error) {
     if (state.receiptScanId === scanId) toast(error.message || "Fiş yapay zekâ ile okunamadı.", true);
   } finally {

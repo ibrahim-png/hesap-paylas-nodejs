@@ -130,14 +130,22 @@ function completeProfileRequired(request, response, next) {
   next();
 }
 
-function aiReceiptAllowed(userId) {
+function recentAiReceiptRequests(userId) {
   const now = Date.now();
   const windowStart = now - 60 * 60 * 1000;
   const recent = (aiReceiptRequests.get(userId) || []).filter((time) => time >= windowStart);
-  if (recent.length >= 12) return false;
-  recent.push(now);
   aiReceiptRequests.set(userId, recent);
-  return true;
+  return recent;
+}
+
+function aiReceiptAllowed(userId) {
+  return recentAiReceiptRequests(userId).length < 12;
+}
+
+function recordAiReceiptSuccess(userId) {
+  const recent = recentAiReceiptRequests(userId);
+  recent.push(Date.now());
+  aiReceiptRequests.set(userId, recent);
 }
 
 function responseOutputText(openaiResponse) {
@@ -147,6 +155,117 @@ function responseOutputText(openaiResponse) {
     .filter((content) => content.type === "output_text")
     .map((content) => content.text)
     .join("");
+}
+
+function delay(milliseconds) {
+  return new Promise((resolve) => setTimeout(resolve, milliseconds));
+}
+
+function receiptScanError(message, { status = 502, retryable = false } = {}) {
+  const error = new Error(message);
+  error.status = status;
+  error.retryable = retryable;
+  return error;
+}
+
+function openaiErrorMessage(status) {
+  if (status === 400) return "Fiş görseli yapay zekâ servisine gönderilemedi. Lütfen daha net bir fotoğraf deneyin.";
+  if (status === 401) return "OpenAI API anahtarı geçersiz veya süresi dolmuş.";
+  if (status === 403) return "OpenAI API hesabının model erişimini ve faturalandırmasını kontrol edin.";
+  if (status === 429) return "OpenAI API kotası veya hız sınırı dolu. Biraz sonra tekrar deneyin.";
+  return "OpenAI servisi geçici olarak yanıt veremedi. Lütfen tekrar deneyin.";
+}
+
+function normalizeAiReceipt(parsed) {
+  const items = (Array.isArray(parsed?.items) ? parsed.items : []).map((item) => {
+    const quantity = Math.max(1, Math.min(99, Math.round(Number(item.quantity) || 1)));
+    const totalCents = Math.round(Number(item.totalCents) || 0);
+    return {
+      id: crypto.randomUUID(),
+      name: String(item.name || "").trim().slice(0, 120),
+      quantity,
+      totalCents,
+      unitPriceCents: Math.round(totalCents / quantity),
+    };
+  }).filter((item) => item.name && item.totalCents > 0 && item.totalCents <= 10_000_000).slice(0, 100);
+  const warnings = (Array.isArray(parsed?.warnings) ? parsed.warnings : []).map((warning) => String(warning).slice(0, 200));
+  if (!items.length) warnings.unshift("Fişte güvenle ayırt edilebilen ürün kalemi bulunamadı.");
+  return { items, warnings };
+}
+
+async function readReceiptWithOpenAi(imageData) {
+  let lastError;
+  for (let attempt = 1; attempt <= 3; attempt += 1) {
+    try {
+      const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
+        method: "POST",
+        signal: AbortSignal.timeout(25_000),
+        headers: { Authorization: `Bearer ${openaiApiKey}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          model: openaiReceiptModel,
+          store: false,
+          max_output_tokens: 1_800,
+          input: [{
+            role: "user",
+            content: [
+              { type: "input_text", text: "Bu bir Türkiye restoran fişi. Sadece satılabilir yiyecek/içecek kalemlerini çıkar. Ara toplam, genel toplam, KDV, indirim, ödeme yöntemi, para üstü ve servis bilgilerini kalem olarak ekleme. Fiyatları Türk lirası kuruşu olarak döndür. Adet net değilse 1 kullan. Okunamayan veya şüpheli satırları warnings alanına yaz. Her koşulda geçerli şema ile yanıt ver." },
+              { type: "input_image", image_url: imageData, detail: "high" },
+            ],
+          }],
+          text: {
+            format: {
+              type: "json_schema",
+              name: "restaurant_receipt",
+              strict: true,
+              schema: {
+                type: "object",
+                additionalProperties: false,
+                required: ["items", "warnings"],
+                properties: {
+                  items: {
+                    type: "array",
+                    maxItems: 100,
+                    items: {
+                      type: "object",
+                      additionalProperties: false,
+                      required: ["name", "quantity", "totalCents"],
+                      properties: {
+                        name: { type: "string" },
+                        quantity: { type: "integer" },
+                        totalCents: { type: "integer" },
+                      },
+                    },
+                  },
+                  warnings: { type: "array", items: { type: "string" }, maxItems: 20 },
+                },
+              },
+            },
+          },
+        }),
+      });
+      const result = await openaiResponse.json().catch(() => ({}));
+      if (!openaiResponse.ok) {
+        const retryable = openaiResponse.status === 408 || openaiResponse.status === 409 || openaiResponse.status === 429 || openaiResponse.status >= 500;
+        console.error("OpenAI fiş okuma hatası:", openaiResponse.status, result?.error?.message || "Bilinmeyen hata");
+        throw receiptScanError(openaiErrorMessage(openaiResponse.status), { status: openaiResponse.status === 429 ? 429 : 502, retryable });
+      }
+      if (result.status && result.status !== "completed") {
+        throw receiptScanError("OpenAI yanıtı tamamlanamadı.", { retryable: true });
+      }
+      let parsed;
+      try {
+        parsed = JSON.parse(responseOutputText(result));
+      } catch {
+        throw receiptScanError("OpenAI yanıtı geçersizdi.", { retryable: true });
+      }
+      return { ...normalizeAiReceipt(parsed), attempts: attempt };
+    } catch (error) {
+      lastError = error?.status ? error : receiptScanError("OpenAI servisine bağlanırken zaman aşımı oluştu.", { retryable: true });
+      if (!lastError.retryable || attempt === 3) throw lastError;
+      await delay(attempt * 1_000);
+    }
+  }
+  throw lastError;
 }
 
 app.get("/api/health", async (_request, response) => {
@@ -171,73 +290,12 @@ app.post("/api/receipts/ai", authRequired, completeProfileRequired, async (reque
   if (!imageBytes.length || imageBytes.length > 2_000_000) return response.status(413).json({ error: "Fiş görseli en fazla 2 MB olmalıdır." });
 
   try {
-    const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
-      method: "POST",
-      signal: AbortSignal.timeout(60_000),
-      headers: { Authorization: `Bearer ${openaiApiKey}`, "Content-Type": "application/json" },
-      body: JSON.stringify({
-        model: openaiReceiptModel,
-        store: false,
-        max_output_tokens: 1_800,
-        input: [{
-          role: "user",
-          content: [
-            { type: "input_text", text: "Bu bir Türkiye restoran fişi. Sadece satılabilir yiyecek/içecek kalemlerini çıkar. Ara toplam, genel toplam, KDV, indirim, ödeme yöntemi, para üstü ve servis bilgilerini kalem olarak ekleme. Fiyatları Türk lirası kuruşu olarak döndür. Adet net değilse 1 kullan. Okunamayan veya şüpheli satırları warnings alanına yaz." },
-            { type: "input_image", image_url: imageData, detail: "high" },
-          ],
-        }],
-        text: {
-          format: {
-            type: "json_schema",
-            name: "restaurant_receipt",
-            strict: true,
-            schema: {
-              type: "object",
-              additionalProperties: false,
-              required: ["items", "warnings"],
-              properties: {
-                items: {
-                  type: "array",
-                  maxItems: 100,
-                  items: {
-                    type: "object",
-                    additionalProperties: false,
-                    required: ["name", "quantity", "totalCents"],
-                    properties: {
-                      name: { type: "string" },
-                      quantity: { type: "integer" },
-                      totalCents: { type: "integer" },
-                    },
-                  },
-                },
-                warnings: { type: "array", items: { type: "string" }, maxItems: 20 },
-              },
-            },
-          },
-        },
-      }),
-    });
-    const result = await openaiResponse.json().catch(() => ({}));
-    if (!openaiResponse.ok) {
-      console.error("OpenAI fiş okuma hatası:", result?.error?.message || openaiResponse.status);
-      return response.status(openaiResponse.status === 429 ? 429 : 502).json({ error: openaiResponse.status === 429 ? "Yapay zekâ servisi şu an yoğun. Lütfen tekrar deneyin." : "Fiş yapay zekâ ile okunamadı." });
-    }
-    const parsed = JSON.parse(responseOutputText(result));
-    const items = (Array.isArray(parsed.items) ? parsed.items : []).map((item) => {
-      const quantity = Math.max(1, Math.min(99, Math.round(Number(item.quantity) || 1)));
-      const totalCents = Math.round(Number(item.totalCents) || 0);
-      return {
-        id: crypto.randomUUID(),
-        name: String(item.name || "").trim().slice(0, 120),
-        quantity,
-        totalCents,
-        unitPriceCents: Math.round(totalCents / quantity),
-      };
-    }).filter((item) => item.name && item.totalCents > 0 && item.totalCents <= 10_000_000).slice(0, 100);
-    response.set("Cache-Control", "no-store").json({ items, warnings: (Array.isArray(parsed.warnings) ? parsed.warnings : []).map((warning) => String(warning).slice(0, 200)) });
+    const receipt = await readReceiptWithOpenAi(imageData);
+    recordAiReceiptSuccess(request.user.id);
+    response.set("Cache-Control", "no-store").json(receipt);
   } catch (error) {
-    console.error("Yapay zekâ ile fiş okuma başarısız:", error);
-    response.status(502).json({ error: "Fiş yapay zekâ ile okunamadı. Lütfen tekrar deneyin." });
+    console.error("Yapay zekâ ile fiş okuma başarısız:", error.message);
+    response.status(error.status || 502).json({ error: error.message || "Fiş yapay zekâ ile okunamadı. Lütfen tekrar deneyin." });
   }
 });
 

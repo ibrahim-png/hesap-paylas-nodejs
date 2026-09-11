@@ -21,6 +21,8 @@ const googleClientId = process.env.GOOGLE_CLIENT_ID || "";
 const googleClient = new OAuth2Client(googleClientId);
 const openaiApiKey = process.env.OPENAI_API_KEY || "";
 const openaiReceiptModel = process.env.OPENAI_RECEIPT_MODEL || "gpt-5-mini";
+const openaiReceiptTimeoutMs = Math.max(30_000, Math.min(60_000, Number(process.env.OPENAI_RECEIPT_TIMEOUT_MS) || 45_000));
+const openaiReceiptAttempts = 2;
 const aiReceiptRequests = new Map();
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
@@ -195,16 +197,20 @@ function normalizeAiReceipt(parsed) {
 
 async function readReceiptWithOpenAi(imageData) {
   let lastError;
-  for (let attempt = 1; attempt <= 3; attempt += 1) {
+  for (let attempt = 1; attempt <= openaiReceiptAttempts; attempt += 1) {
     try {
+      const startedAt = Date.now();
       const openaiResponse = await fetch("https://api.openai.com/v1/responses", {
         method: "POST",
-        signal: AbortSignal.timeout(25_000),
+        signal: AbortSignal.timeout(openaiReceiptTimeoutMs),
         headers: { Authorization: `Bearer ${openaiApiKey}`, "Content-Type": "application/json" },
         body: JSON.stringify({
           model: openaiReceiptModel,
           store: false,
-          max_output_tokens: 1_800,
+          // A receipt needs a short JSON answer. Keeping this modest avoids spending
+          // time on unnecessary reasoning/output and is friendlier to free hosts.
+          max_output_tokens: 700,
+          ...(openaiReceiptModel.startsWith("gpt-5") ? { reasoning: { effort: "minimal" } } : {}),
           input: [{
             role: "user",
             content: [
@@ -246,7 +252,7 @@ async function readReceiptWithOpenAi(imageData) {
       const result = await openaiResponse.json().catch(() => ({}));
       if (!openaiResponse.ok) {
         const retryable = openaiResponse.status === 408 || openaiResponse.status === 409 || openaiResponse.status === 429 || openaiResponse.status >= 500;
-        console.error("OpenAI fiş okuma hatası:", openaiResponse.status, result?.error?.message || "Bilinmeyen hata");
+        console.error("OpenAI fiş okuma hatası:", openaiResponse.status, result?.error?.message || "Bilinmeyen hata", `${Date.now() - startedAt}ms`);
         throw receiptScanError(openaiErrorMessage(openaiResponse.status), { status: openaiResponse.status === 429 ? 429 : 502, retryable });
       }
       if (result.status && result.status !== "completed") {
@@ -260,8 +266,14 @@ async function readReceiptWithOpenAi(imageData) {
       }
       return { ...normalizeAiReceipt(parsed), attempts: attempt };
     } catch (error) {
-      lastError = error?.status ? error : receiptScanError("OpenAI servisine bağlanırken zaman aşımı oluştu.", { retryable: true });
-      if (!lastError.retryable || attempt === 3) throw lastError;
+      const timedOut = error?.name === "TimeoutError" || error?.name === "AbortError";
+      lastError = error?.status ? error : receiptScanError(
+        timedOut
+          ? `OpenAI yanıtı ${Math.round(openaiReceiptTimeoutMs / 1_000)} saniye içinde tamamlanmadı.`
+          : "OpenAI servisine bağlanırken geçici bir hata oluştu.",
+        { retryable: true },
+      );
+      if (!lastError.retryable || attempt === openaiReceiptAttempts) throw lastError;
       await delay(attempt * 1_000);
     }
   }
